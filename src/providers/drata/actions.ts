@@ -13,7 +13,18 @@ export type DrataActionName =
   | "list_controls"
   | "get_control"
   | "list_vendors"
-  | "get_vendor";
+  | "get_vendor"
+  | "list_assets"
+  | "list_monitors"
+  | "list_policies"
+  | "list_events"
+  | "list_frameworks"
+  | "list_framework_requirements"
+  | "list_evidence_library"
+  | "get_evidence_item"
+  | "list_risk_registers"
+  | "list_monitoring_tests"
+  | "get_monitoring_test";
 
 const nonEmptyString = (description: string) => s.string(description, { minLength: 1 });
 
@@ -24,7 +35,7 @@ const pageSizeSchema = s.integer("The number of results to return.", {
 });
 const includeTotalCountSchema = s.boolean("Whether Drata should include totalCount on the first page of results.");
 const sortSchema = nonEmptyString("The Drata field name to sort by.");
-const sortDirectionSchema = s.stringEnum("The direction to sort returned data.", ["asc", "desc"]);
+const sortDirectionSchema = s.stringEnum("The direction to sort returned data.", ["ASC", "DESC", "asc", "desc"]);
 const expandSchema = s.array(
   "Related Drata subcollections and sub-objects to expand.",
   nonEmptyString("One Drata expand value."),
@@ -263,6 +274,152 @@ const getVendorAction = defineProviderAction(service, {
   }),
 });
 
+const legacyPageSchema = s.integer("The one-based Drata page number.", { minimum: 1 });
+
+const listAssetsAction = defineProviderAction(service, {
+  name: "list_assets",
+  description: "List one page of Drata asset inventory records, with removed assets excluded unless requested.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "Filters and pagination for Drata assets.",
+    {
+      size: pageSizeSchema,
+      page: legacyPageSchema,
+      includeRemoved: s.boolean("Whether to include assets whose removedAt field is set."),
+    },
+    { optional: ["size", "page", "includeRemoved"] },
+  ),
+  outputSchema: s.object("A page of Drata assets.", {
+    data: s.array("The Drata assets returned for this page.", rawObjectSchema),
+    pagination: paginationSchema,
+    raw: listRawSchema,
+  }),
+});
+
+const listMonitorsAction = defineProviderAction(service, {
+  name: "list_monitors",
+  description: "List Drata automated monitoring tests with their current result status.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "Pagination for Drata monitors.",
+    { size: pageSizeSchema, page: legacyPageSchema },
+    { optional: ["size", "page"] },
+  ),
+  outputSchema: s.object("A page of Drata monitoring tests.", listOutputProperties),
+});
+
+const listPoliciesAction = defineProviderAction(service, {
+  name: "list_policies",
+  description: "List one page of active Drata policies from the legacy policy endpoint.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "Pagination for Drata policies.",
+    { size: pageSizeSchema, page: legacyPageSchema },
+    { optional: ["size", "page"] },
+  ),
+  outputSchema: s.object("A page of Drata policies.", listOutputProperties),
+});
+
+const listEventsAction = defineProviderAction(service, {
+  name: "list_events",
+  description: "List one bounded page of Drata events, newest first by default.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "Filters and pagination for Drata events.",
+    {
+      ...listInputProperties,
+      type: s.nonEmptyString("Filter by Drata event type."),
+      category: s.nonEmptyString("Filter by Drata event category."),
+      since: s.dateTime("Only return events at or after this timestamp on the fetched page."),
+    },
+    { optional: [...listInputOptional, "type", "category", "since"] },
+  ),
+  outputSchema: s.object("A page of Drata events.", listOutputProperties),
+});
+
+const listFrameworksAction = defineProviderAction(service, {
+  name: "list_frameworks",
+  description: "List compliance frameworks enabled in a Drata workspace.",
+  requiredScopes: [],
+  inputSchema: s.object("The Drata workspace framework lookup.", { workspaceId: workspaceIdSchema }),
+  outputSchema: s.object("The Drata frameworks in this workspace.", listOutputProperties),
+});
+
+const listFrameworkRequirementsAction = defineProviderAction(service, {
+  name: "list_framework_requirements",
+  description:
+    "List one bounded page of requirements across a Drata workspace's frameworks. Large guidance prose remains in the raw provider records.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "Filters and pagination for Drata framework requirements.",
+    { workspaceId: workspaceIdSchema, ...listInputProperties },
+    { optional: listInputOptional },
+  ),
+  outputSchema: s.object("A page of Drata framework requirements.", listOutputProperties),
+});
+
+const listEvidenceLibraryAction = defineProviderAction(service, {
+  name: "list_evidence_library",
+  description: "List one bounded page of evidence-library items in a Drata workspace.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "Filters and pagination for the Drata evidence library.",
+    {
+      workspaceId: workspaceIdSchema,
+      ...listInputProperties,
+      name: s.string("Filter evidence by name prefix."),
+      statuses: s.array("Filter by evidence status.", s.nonEmptyString("One Drata evidence status.")),
+    },
+    { optional: [...listInputOptional, "name", "statuses"] },
+  ),
+  outputSchema: s.object("A page of Drata evidence-library items.", listOutputProperties),
+});
+
+const getEvidenceItemAction = defineProviderAction(service, {
+  name: "get_evidence_item",
+  description: "Get one Drata evidence-library item by ID.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "The Drata evidence item lookup.",
+    { workspaceId: workspaceIdSchema, evidenceId: s.integer("The Drata evidence item ID."), expand: expandSchema },
+    { optional: ["expand"] },
+  ),
+  outputSchema: rawObjectSchema,
+});
+
+const listRiskRegistersAction = defineProviderAction(service, {
+  name: "list_risk_registers",
+  description: "List Drata risk registers. This endpoint requires the Drata Risk Management product.",
+  requiredScopes: [],
+  inputSchema: s.object("Pagination for Drata risk registers.", listInputProperties, {
+    optional: listInputOptional,
+  }),
+  outputSchema: s.object("A page of Drata risk registers.", listOutputProperties),
+});
+
+const listMonitoringTestsAction = defineProviderAction(service, {
+  name: "list_monitoring_tests",
+  description: "List one bounded page of monitoring tests in a Drata workspace.",
+  requiredScopes: [],
+  inputSchema: s.object(
+    "Pagination for Drata monitoring tests.",
+    { workspaceId: workspaceIdSchema, ...listInputProperties },
+    { optional: listInputOptional },
+  ),
+  outputSchema: s.object("A page of Drata monitoring tests.", listOutputProperties),
+});
+
+const getMonitoringTestAction = defineProviderAction(service, {
+  name: "get_monitoring_test",
+  description: "Get one workspace-scoped Drata monitoring test by test ID.",
+  requiredScopes: [],
+  inputSchema: s.object("The Drata monitoring test lookup.", {
+    workspaceId: workspaceIdSchema,
+    testId: s.integer("The workspace-scoped monitoring test ID."),
+  }),
+  outputSchema: rawObjectSchema,
+});
+
 export const drataActions: ActionDefinition[] = [
   getCompanyAction,
   listWorkspacesAction,
@@ -272,6 +429,17 @@ export const drataActions: ActionDefinition[] = [
   getControlAction,
   listVendorsAction,
   getVendorAction,
+  listAssetsAction,
+  listMonitorsAction,
+  listPoliciesAction,
+  listEventsAction,
+  listFrameworksAction,
+  listFrameworkRequirementsAction,
+  listEvidenceLibraryAction,
+  getEvidenceItemAction,
+  listRiskRegistersAction,
+  listMonitoringTestsAction,
+  getMonitoringTestAction,
 ];
 
 export const drataActionByName: Map<DrataActionName, ActionDefinition> = new Map(

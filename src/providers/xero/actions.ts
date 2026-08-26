@@ -9,6 +9,8 @@ import {
   xeroContactsWriteScope,
   xeroInvoicesReadScope,
   xeroInvoicesWriteScope,
+  xeroJournalsReadScope,
+  xeroPaymentsReadScope,
   xeroProfitAndLossReadScope,
   xeroSettingsReadScope,
 } from "./scopes.ts";
@@ -257,6 +259,14 @@ const reportOutput = s.object(
     description: "A financial report with labelled sections an agent can summarise.",
   },
 );
+
+const rawXeroObject = s.looseObject("The raw Xero Accounting API object.");
+const rawXeroPage = (description: string) =>
+  s.object(description, {
+    items: s.array("The Xero records returned for this page.", rawXeroObject),
+    page: pageOutput,
+    returned: s.nonNegativeInteger("The number of records returned."),
+  });
 
 const searchResults = <T extends JsonSchema>(itemSchema: T, description: string) =>
   s.object(
@@ -508,5 +518,183 @@ export const xeroActions: ActionDefinition[] = [
       { description: "Balance sheet report input." },
     ),
     outputSchema: reportOutput,
+  }),
+  defineProviderAction(service, {
+    name: "list_payments",
+    requiredScopes: [xeroPaymentsReadScope],
+    description:
+      "List payments applied to invoices, credit notes, overpayments, or prepayments. Deleted payments are excluded by default.",
+    inputSchema: s.object(
+      {
+        ...tenantField,
+        page: pageInput,
+        invoice_number: s.string("Filter by exact invoice number."),
+        invoice_id: xeroId,
+        payment_id: xeroId,
+        reference: s.string("Filter by exact payment reference."),
+        include_deleted: s.boolean("Whether to include deleted payments, which are excluded by default."),
+        page_size: s.integer("The page size, up to Xero's 1000-record maximum.", {
+          minimum: 1,
+          maximum: 1000,
+        }),
+      },
+      {
+        optional: [
+          "tenant_id",
+          "page",
+          "invoice_number",
+          "invoice_id",
+          "payment_id",
+          "reference",
+          "include_deleted",
+          "page_size",
+        ],
+        description: "Payment list input.",
+      },
+    ),
+    outputSchema: rawXeroPage("A page of Xero payments."),
+  }),
+  defineProviderAction(service, {
+    name: "get_payment",
+    requiredScopes: [xeroPaymentsReadScope],
+    description: "Get one Xero payment by ID.",
+    inputSchema: s.object(
+      { ...tenantField, payment_id: xeroId },
+      { required: ["payment_id"], description: "Payment lookup input." },
+    ),
+    outputSchema: s.nullable(rawXeroObject),
+  }),
+  defineProviderAction(service, {
+    name: "list_quotes",
+    requiredScopes: [xeroInvoicesReadScope],
+    description: "List Xero quotes with optional status, contact, and page filters.",
+    inputSchema: s.object(
+      {
+        ...tenantField,
+        status: s.stringEnum(["DRAFT", "SENT", "DECLINED", "ACCEPTED", "INVOICED", "DELETED"], {
+          description: "Filter by quote status.",
+        }),
+        contact_id: xeroId,
+        quote_number: s.string("Filter by exact quote number."),
+        page: pageInput,
+      },
+      {
+        optional: ["tenant_id", "status", "contact_id", "quote_number", "page"],
+        description: "Quote list input.",
+      },
+    ),
+    outputSchema: rawXeroPage("A page of Xero quotes."),
+  }),
+  defineProviderAction(service, {
+    name: "get_quote",
+    requiredScopes: [xeroInvoicesReadScope],
+    description: "Get one Xero quote by ID.",
+    inputSchema: s.object(
+      { ...tenantField, quote_id: xeroId },
+      { required: ["quote_id"], description: "Quote lookup input." },
+    ),
+    outputSchema: s.nullable(rawXeroObject),
+  }),
+  defineProviderAction(service, {
+    name: "list_purchase_orders",
+    requiredScopes: [xeroInvoicesReadScope],
+    description: "List Xero purchase orders with optional status, date, and page filters.",
+    inputSchema: s.object(
+      {
+        ...tenantField,
+        status: s.stringEnum(["DRAFT", "SUBMITTED", "AUTHORISED", "BILLED", "DELETED"], {
+          description: "Filter by purchase-order status.",
+        }),
+        date_from: s.date("Inclusive purchase-order date lower bound."),
+        date_to: s.date("Inclusive purchase-order date upper bound."),
+        page: pageInput,
+        page_size: s.integer("The page size.", { minimum: 1, maximum: 1000 }),
+      },
+      {
+        optional: ["tenant_id", "status", "date_from", "date_to", "page", "page_size"],
+        description: "Purchase-order list input.",
+      },
+    ),
+    outputSchema: rawXeroPage("A page of Xero purchase orders."),
+  }),
+  defineProviderAction(service, {
+    name: "get_purchase_order",
+    requiredScopes: [xeroInvoicesReadScope],
+    description: "Get one Xero purchase order by ID.",
+    inputSchema: s.object(
+      { ...tenantField, purchase_order_id: xeroId },
+      { required: ["purchase_order_id"], description: "Purchase-order lookup input." },
+    ),
+    outputSchema: s.nullable(rawXeroObject),
+  }),
+  defineProviderAction(service, {
+    name: "list_items",
+    requiredScopes: [xeroSettingsReadScope],
+    description: "List tracked and untracked Xero inventory items.",
+    inputSchema: s.object(tenantField, { optional: ["tenant_id"], description: "Item list input." }),
+    outputSchema: s.object("The Xero inventory items.", {
+      items: s.array("The inventory items returned by Xero.", rawXeroObject),
+      returned: s.nonNegativeInteger("The number of inventory items returned."),
+    }),
+  }),
+  defineProviderAction(service, {
+    name: "get_item",
+    requiredScopes: [xeroSettingsReadScope],
+    description: "Get one Xero inventory item by ID or code.",
+    inputSchema: s.object(
+      { ...tenantField, item_id: s.nonEmptyString("The Xero ItemID or item code.") },
+      { required: ["item_id"], description: "Item lookup input." },
+    ),
+    outputSchema: s.nullable(rawXeroObject),
+  }),
+  defineProviderAction(service, {
+    name: "list_journals",
+    requiredScopes: [xeroJournalsReadScope],
+    description:
+      "List up to 100 general-ledger journals after a journal-number offset, oldest first. These are system journals, not manual journals.",
+    inputSchema: s.object(
+      {
+        ...tenantField,
+        offset: s.nonNegativeInteger("Return journals after this journal number."),
+        payments_only: s.boolean("Whether to return only cash-basis payment journals."),
+      },
+      { optional: ["tenant_id", "offset", "payments_only"], description: "Journal list input." },
+    ),
+    outputSchema: s.object("A page of Xero journals.", {
+      items: s.array("The journals returned by Xero.", rawXeroObject),
+      returned: s.nonNegativeInteger("The number of journals returned."),
+      next_offset: s.nullableInteger("The last journal number, used to fetch the next page."),
+    }),
+  }),
+  defineProviderAction(service, {
+    name: "get_journal",
+    requiredScopes: [xeroJournalsReadScope],
+    description: "Get one Xero general-ledger journal by ID.",
+    inputSchema: s.object(
+      { ...tenantField, journal_id: xeroId },
+      { required: ["journal_id"], description: "Journal lookup input." },
+    ),
+    outputSchema: s.nullable(rawXeroObject),
+  }),
+  defineProviderAction(service, {
+    name: "list_tax_rates",
+    requiredScopes: [xeroSettingsReadScope],
+    description: "List tax rates configured for a Xero organisation.",
+    inputSchema: s.object(tenantField, { optional: ["tenant_id"], description: "Tax-rate list input." }),
+    outputSchema: s.object("The Xero tax rates.", {
+      tax_rates: s.array("Tax rates configured in the organisation.", rawXeroObject),
+    }),
+  }),
+  defineProviderAction(service, {
+    name: "list_tracking_categories",
+    requiredScopes: [xeroSettingsReadScope],
+    description: "List Xero tracking categories and their options.",
+    inputSchema: s.object(
+      { ...tenantField, include_archived: s.boolean("Whether to include archived categories and options.") },
+      { optional: ["tenant_id", "include_archived"], description: "Tracking-category list input." },
+    ),
+    outputSchema: s.object("The Xero tracking categories.", {
+      tracking_categories: s.array("Tracking categories configured in the organisation.", rawXeroObject),
+    }),
   }),
 ];

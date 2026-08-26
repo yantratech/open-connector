@@ -159,6 +159,7 @@ export class OAuthFlowService {
       responseEnvelope: auth.tokenResponseEnvelope,
       tokenRequestFields: auth.tokenRequestFields,
       tokenEndpointAuthMethod: auth.tokenEndpointAuthMethod,
+      privateKeyJwt: this.clientConfigs.resolvePrivateKeyJwt(pending.service, config),
       tokenRequestFormat: auth.tokenRequestFormat,
       tokenUrl: this.clientConfigs.resolveEndpointUrl(pending.service, auth.tokenUrl, config),
       extraFields: createTokenExtraFields(pending, auth.tokenRequestCallbackParameters, input.callbackParameters),

@@ -180,6 +180,82 @@ describe("tenant resolution", () => {
   });
 });
 
+describe("ported accounting reads", () => {
+  it("lists payments with safe native filters and excludes deleted rows by default", async () => {
+    const payments = [{ PaymentID: "payment-1", Status: "AUTHORISED", Amount: 120 }];
+    const { fetcher, requests } = createFetcher({
+      "https://api.xero.com/api.xro/2.0/Payments": { Payments: payments },
+    });
+
+    await expect(
+      xeroActionHandlers.list_payments(
+        {
+          tenant_id: "tenant-123",
+          invoice_number: 'INV-"42"',
+          invoice_id: "11111111-1111-4111-8111-111111111111",
+          page: 2,
+          page_size: 25,
+        },
+        { accessToken, fetcher },
+      ),
+    ).resolves.toEqual({ items: payments, page: 2, returned: 1 });
+
+    const request = requests[0];
+    const url = new URL(request.url);
+    expect(url.searchParams.get("where")).toBe(
+      'Invoice.InvoiceNumber=="INV-\\"42\\"" AND Invoice.InvoiceID==guid("11111111-1111-4111-8111-111111111111") AND Status!="DELETED"',
+    );
+    expect(url.searchParams.get("page")).toBe("2");
+    expect(url.searchParams.get("pageSize")).toBe("25");
+    expect(request.headers["xero-tenant-id"]).toBe("tenant-123");
+  });
+
+  it("rejects an invalid payment filter GUID before making a request", async () => {
+    const { fetcher, requests } = createFetcher({});
+
+    await expect(
+      xeroActionHandlers.list_payments(
+        { tenant_id: "tenant-123", payment_id: '") OR Status!="DELETED"' },
+        { accessToken, fetcher },
+      ),
+    ).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/valid Xero GUID/) });
+    expect(requests).toEqual([]);
+  });
+
+  it("omits the where parameter when deleted payments are explicitly included without filters", async () => {
+    const { fetcher, requests } = createFetcher({
+      "https://api.xero.com/api.xro/2.0/Payments": { Payments: [] },
+    });
+
+    await xeroActionHandlers.list_payments(
+      { tenant_id: "tenant-123", include_deleted: true },
+      { accessToken, fetcher },
+    );
+
+    expect(new URL(requests[0].url).searchParams.has("where")).toBe(false);
+  });
+
+  it("returns the last journal number as the next offset only for a full page", async () => {
+    const journals = Array.from({ length: 100 }, (_, index) => ({
+      JournalID: `journal-${index}`,
+      JournalNumber: index + 1,
+    }));
+    const { fetcher, requests } = createFetcher({
+      "https://api.xero.com/api.xro/2.0/Journals": { Journals: journals },
+    });
+
+    await expect(
+      xeroActionHandlers.list_journals(
+        { tenant_id: "tenant-123", offset: 10, payments_only: true },
+        { accessToken, fetcher },
+      ),
+    ).resolves.toEqual({ items: journals, returned: 100, next_offset: 100 });
+    const url = new URL(requests[0].url);
+    expect(url.searchParams.get("offset")).toBe("10");
+    expect(url.searchParams.get("paymentsOnly")).toBe("true");
+  });
+});
+
 describe("get_contact", () => {
   it("maps the PascalCase Xero payload to the snake_case output", async () => {
     const { fetcher } = createFetcher({

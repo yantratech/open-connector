@@ -97,6 +97,53 @@ describe("OAuthClientConfigService", () => {
       }),
     ).toThrow("requestedScopes must contain at least one scope.");
   });
+
+  it("accepts private_key_jwt without a client secret and resolves the encrypted key", () => {
+    const privateKeyProvider: ProviderDefinition = {
+      ...oauthProvider("private_key"),
+      auth: [
+        {
+          type: "oauth2",
+          authorizationUrl: "https://example.com/oauth/authorize",
+          tokenUrl: "https://example.com/oauth/token",
+          scopes: ["read"],
+          tokenEndpointAuthMethod: "private_key_jwt",
+          privateKeyJwt: {
+            audience: "https://example.com",
+            issuer: "redirect_uri_host",
+            privateKeyField: "privateKeyPem",
+          },
+          clientConfigFields: [
+            {
+              key: "privateKeyPem",
+              label: "Private key",
+              inputType: "textarea",
+              required: true,
+              secret: true,
+              location: "secretExtra",
+            },
+          ],
+        },
+      ],
+    };
+    const service = new OAuthClientConfigService({
+      catalog: createCatalogStore([privateKeyProvider]),
+      origin: "https://connect.example.com",
+      store: new MemoryOAuthClientConfigStore(),
+    });
+    const config = service.normalizeConfig("private_key", {
+      clientId: "client-id",
+      clientSecret: "",
+      secretExtra: { privateKeyPem: "private-key" },
+    });
+
+    expect(service.resolvePrivateKeyJwt("private_key", config)).toEqual({
+      audience: "https://example.com",
+      issuer: "connect.example.com",
+      lifetimeSeconds: 300,
+      privateKey: "private-key",
+    });
+  });
 });
 
 function oauthProvider(service: string): ProviderDefinition {

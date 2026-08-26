@@ -204,6 +204,8 @@ export interface OAuthProviderContext {
   accessToken: string;
   tokenType?: string;
   providerSecret?: Record<string, unknown>;
+  /** Runtime-owned OAuth metadata, including the configured provider app's non-secret extra fields. */
+  metadata?: Record<string, unknown>;
   fetcher: ProviderFetch;
   transitFiles?: TransitFileWriter;
   signal?: AbortSignal;
@@ -975,6 +977,7 @@ export function defineOAuthProviderExecutors(
         accessToken: credential.accessToken,
         tokenType: credential.tokenType,
         providerSecret: credential.providerSecret,
+        metadata: credential.metadata,
         fetcher,
         signal: context.signal,
       };

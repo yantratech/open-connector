@@ -1,5 +1,6 @@
 import type { CatalogStore } from "../catalog-store.ts";
 import type { OAuth2AuthDefinition, OAuthClientConfigFieldDefinition } from "../core/types.ts";
+import type { OAuthPrivateKeyJwtInput } from "./oauth-token.ts";
 
 import { optionalRecord, optionalString, optionalStringArray } from "../core/cast.ts";
 import { normalizeCredentialValues } from "../core/credential-fields.ts";
@@ -105,7 +106,11 @@ export class OAuthClientConfigService {
     if (!clientId) {
       throw new OAuthClientConfigError("invalid_input", "clientId is required.");
     }
-    if (!clientSecret && auth.tokenEndpointAuthMethod !== "none") {
+    if (
+      !clientSecret &&
+      auth.tokenEndpointAuthMethod !== "none" &&
+      auth.tokenEndpointAuthMethod !== "private_key_jwt"
+    ) {
       throw new OAuthClientConfigError("invalid_input", "clientSecret is required.");
     }
 
@@ -155,6 +160,32 @@ export class OAuthClientConfigService {
     });
     assertOAuthEndpointUrl(resolved);
     return resolved;
+  }
+
+  resolvePrivateKeyJwt(service: string, config: OAuthClientConfig): OAuthPrivateKeyJwtInput | undefined {
+    const auth = this.getOAuthDefinition(service);
+    if (auth.tokenEndpointAuthMethod !== "private_key_jwt") {
+      return undefined;
+    }
+    const definition = auth.privateKeyJwt;
+    if (!definition) {
+      throw new OAuthClientConfigError("invalid_input", `${service} is missing privateKeyJwt configuration.`);
+    }
+    const privateKey = config.secretExtra[definition.privateKeyField];
+    if (!privateKey) {
+      throw new OAuthClientConfigError("invalid_input", `${definition.privateKeyField} is required.`);
+    }
+    const lifetimeSeconds = definition.lifetimeSeconds ?? 300;
+    if (!Number.isInteger(lifetimeSeconds) || lifetimeSeconds < 1 || lifetimeSeconds > 600) {
+      throw new OAuthClientConfigError("invalid_input", "privateKeyJwt lifetimeSeconds must be between 1 and 600.");
+    }
+
+    return {
+      audience: definition.audience,
+      issuer: new URL(this.expectedRedirectUri(service)).hostname,
+      lifetimeSeconds,
+      privateKey,
+    };
   }
 
   getOAuthDefinition(service: string): OAuth2AuthDefinition {

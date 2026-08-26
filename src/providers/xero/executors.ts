@@ -2,7 +2,7 @@ import type { CredentialValidators, ProviderExecutors } from "../../core/types.t
 import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { OAuthProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
 
-import { optionalInteger, optionalNumber, optionalString, requiredString } from "../../core/cast.ts";
+import { optionalBoolean, optionalInteger, optionalNumber, optionalString, requiredString } from "../../core/cast.ts";
 import { arrayPayload, definedBody, firstString, objectPayload, requestJson } from "../http-json-runtime.ts";
 import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
 
@@ -201,6 +201,152 @@ export const xeroActionHandlers: ProviderActionHandlers<"xero", XeroHandler> = {
       date: optionalString(input.date),
     });
   },
+  async list_payments(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    const page = optionalInteger(input.page) ?? 1;
+    const invoiceNumber = optionalString(input.invoice_number);
+    const invoiceId = optionalString(input.invoice_id);
+    const paymentId = optionalString(input.payment_id);
+    const reference = optionalString(input.reference);
+    const conditions = [
+      invoiceNumber ? `Invoice.InvoiceNumber=="${escapeXeroWhereValue(invoiceNumber)}"` : undefined,
+      invoiceId ? `Invoice.InvoiceID==guid("${requireXeroGuid(invoiceId, "invoice_id")}")` : undefined,
+      paymentId ? `PaymentID==guid("${requireXeroGuid(paymentId, "payment_id")}")` : undefined,
+      reference ? `Reference=="${escapeXeroWhereValue(reference)}"` : undefined,
+      input.include_deleted === true ? undefined : 'Status!="DELETED"',
+    ].filter((condition): condition is string => condition !== undefined);
+    const where = conditions.length > 0 ? conditions.join(" AND ") : undefined;
+    const payload = await xeroRequest(context, {
+      path: "/Payments",
+      tenantId,
+      query: compactQuery({
+        where,
+        page: String(page),
+        pageSize: optionalIntegerString(input.page_size) ?? "10",
+      }),
+    });
+    return pageResult(resourceList(payload, "Payments"), page, identity);
+  },
+  async get_payment(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    return firstResourceOrNull(
+      await xeroRequest(context, {
+        path: `/Payments/${encodeURIComponent(requiredString(input.payment_id, "payment_id"))}`,
+        tenantId,
+      }),
+      "Payments",
+    );
+  },
+  async list_quotes(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    const page = optionalInteger(input.page) ?? 1;
+    const payload = await xeroRequest(context, {
+      path: "/Quotes",
+      tenantId,
+      query: compactQuery({
+        Status: optionalString(input.status),
+        ContactID: optionalString(input.contact_id),
+        QuoteNumber: optionalString(input.quote_number),
+        page: String(page),
+      }),
+    });
+    return pageResult(resourceList(payload, "Quotes"), page, identity);
+  },
+  async get_quote(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    return firstResourceOrNull(
+      await xeroRequest(context, {
+        path: `/Quotes/${encodeURIComponent(requiredString(input.quote_id, "quote_id"))}`,
+        tenantId,
+      }),
+      "Quotes",
+    );
+  },
+  async list_purchase_orders(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    const page = optionalInteger(input.page) ?? 1;
+    const payload = await xeroRequest(context, {
+      path: "/PurchaseOrders",
+      tenantId,
+      query: compactQuery({
+        Status: optionalString(input.status),
+        DateFrom: optionalString(input.date_from),
+        DateTo: optionalString(input.date_to),
+        page: String(page),
+        pageSize: optionalIntegerString(input.page_size),
+      }),
+    });
+    return pageResult(resourceList(payload, "PurchaseOrders"), page, identity);
+  },
+  async get_purchase_order(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    return firstResourceOrNull(
+      await xeroRequest(context, {
+        path: `/PurchaseOrders/${encodeURIComponent(requiredString(input.purchase_order_id, "purchase_order_id"))}`,
+        tenantId,
+      }),
+      "PurchaseOrders",
+    );
+  },
+  async list_items(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    const items = resourceList(await xeroRequest(context, { path: "/Items", tenantId }), "Items");
+    return { items, returned: items.length };
+  },
+  async get_item(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    return firstResourceOrNull(
+      await xeroRequest(context, {
+        path: `/Items/${encodeURIComponent(requiredString(input.item_id, "item_id"))}`,
+        tenantId,
+      }),
+      "Items",
+    );
+  },
+  async list_journals(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    const paymentsOnly = optionalBoolean(input.payments_only);
+    const payload = await xeroRequest(context, {
+      path: "/Journals",
+      tenantId,
+      query: compactQuery({
+        offset: optionalIntegerString(input.offset),
+        paymentsOnly: paymentsOnly === undefined ? undefined : String(paymentsOnly),
+      }),
+    });
+    const journals = resourceList(payload, "Journals");
+    const lastJournalNumber = optionalInteger(optionalRecordValue(journals.at(-1)).JournalNumber);
+    return {
+      items: journals,
+      returned: journals.length,
+      next_offset: journals.length === 100 ? (lastJournalNumber ?? null) : null,
+    };
+  },
+  async get_journal(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    return firstResourceOrNull(
+      await xeroRequest(context, {
+        path: `/Journals/${encodeURIComponent(requiredString(input.journal_id, "journal_id"))}`,
+        tenantId,
+      }),
+      "Journals",
+    );
+  },
+  async list_tax_rates(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    const payload = await xeroRequest(context, { path: "/TaxRates", tenantId });
+    return { tax_rates: resourceList(payload, "TaxRates") };
+  },
+  async list_tracking_categories(input, context): Promise<unknown> {
+    const tenantId = await resolveTenantId(input, context);
+    const includeArchived = optionalBoolean(input.include_archived);
+    const payload = await xeroRequest(context, {
+      path: "/TrackingCategories",
+      tenantId,
+      query: compactQuery({ includeArchived: includeArchived === undefined ? undefined : String(includeArchived) }),
+    });
+    return { tracking_categories: resourceList(payload, "TrackingCategories") };
+  },
 };
 
 export const executors: ProviderExecutors = defineOAuthProviderExecutors(service, xeroActionHandlers);
@@ -348,6 +494,31 @@ function requireFirst(items: unknown[], message: string, status = 404): unknown 
 
 function pageResult<T>(items: unknown[], page: number, map: (raw: unknown) => T): Record<string, unknown> {
   return { items: items.map(map), page, returned: items.length };
+}
+
+function firstResourceOrNull(payload: Record<string, unknown>, key: string): unknown {
+  return resourceList(payload, key)[0] ?? null;
+}
+
+function identity(value: unknown): unknown {
+  return value;
+}
+
+function optionalIntegerString(value: unknown): string | undefined {
+  const integer = optionalInteger(value);
+  return integer === undefined ? undefined : String(integer);
+}
+
+function requireXeroGuid(value: unknown, fieldName: string): string {
+  const guid = requiredString(value, fieldName);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(guid)) {
+    throw new ProviderRequestError(400, `${fieldName} must be a valid Xero GUID.`);
+  }
+  return guid;
+}
+
+function escapeXeroWhereValue(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 function compactQuery(query: Record<string, string | undefined>): Record<string, string> {
