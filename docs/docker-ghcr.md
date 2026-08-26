@@ -131,6 +131,5 @@ The expected response is:
 
 Images are built and pushed automatically, so the tags above stay current: every push to `main`
 updates `tip` and adds the `<short-sha>` tag, and every published release adds `latest` and the
-release version. Each tag is a multi-arch manifest built natively for `linux/amd64` and
-`linux/arm64`. The build is defined in
+release version. Each tag is a multi-arch manifest for `linux/amd64` and `linux/arm64`. The build is defined in
 [`.github/workflows/publish-docker.yml`](../.github/workflows/publish-docker.yml).

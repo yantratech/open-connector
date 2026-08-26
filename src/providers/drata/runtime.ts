@@ -2,7 +2,10 @@ import type { CredentialValidationResult } from "../../core/types.ts";
 import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { booleanString, compactObject } from "../../core/cast.ts";
-import { providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  providerUserAgent,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 export const drataRegionBaseUrls = {
   us: "https://public-api.drata.com/public/v2",
@@ -21,7 +24,10 @@ export interface DrataActionContext {
   signal?: AbortSignal;
 }
 
-type DrataActionHandler = (input: Record<string, unknown>, context: DrataActionContext) => Promise<unknown>;
+type DrataActionHandler = (
+  input: Record<string, unknown>,
+  context: DrataActionContext,
+) => Promise<unknown>;
 
 type DrataRequestOptions = {
   path: string;
@@ -33,7 +39,10 @@ type DrataRequestOptions = {
   signal?: AbortSignal;
 };
 
-export const drataActionHandlers: ProviderActionHandlers<"drata", DrataActionHandler> = {
+export const drataActionHandlers: ProviderActionHandlers<
+  "drata",
+  DrataActionHandler
+> = {
   get_company(_input, context) {
     return getCompany(context);
   },
@@ -80,7 +89,7 @@ export const drataActionHandlers: ProviderActionHandlers<"drata", DrataActionHan
         cursor: asOptionalString(input.cursor),
         size: asOptionalIntegerString(input.size),
         sort: asOptionalString(input.sort),
-        sortDir: asOptionalString(input.sortDir),
+        sortDir: asOptionalSortDirection(input.sortDir),
       },
     );
   },
@@ -98,6 +107,141 @@ export const drataActionHandlers: ProviderActionHandlers<"drata", DrataActionHan
   get_vendor(input, context) {
     const vendorId = requireInteger(input.vendorId, "vendorId");
     return getRecord(`/vendors/${vendorId}`, input, context, "vendor");
+  },
+  async list_assets(input, context) {
+    const result = await listRecords(
+      "/assets",
+      input,
+      context,
+      { page: asOptionalIntegerString(input.page) },
+      legacyDrataBaseUrl(context.baseUrl),
+    );
+    if (input.includeRemoved !== true) {
+      result.data = result.data.filter(
+        (item) => asObject(item)?.removedAt == null,
+      );
+      result.raw = { ...result.raw, data: result.data };
+    }
+    return result;
+  },
+  list_monitors(input, context) {
+    return listRecords(
+      "/monitors",
+      input,
+      context,
+      { page: asOptionalIntegerString(input.page) },
+      legacyDrataBaseUrl(context.baseUrl),
+    );
+  },
+  list_policies(input, context) {
+    return listRecords(
+      "/policies",
+      input,
+      context,
+      { page: asOptionalIntegerString(input.page) },
+      legacyDrataBaseUrl(context.baseUrl),
+    );
+  },
+  async list_events(input, context) {
+    const since = asOptionalString(input.since);
+    const sinceTimestamp = since === undefined ? undefined : Date.parse(since);
+    if (sinceTimestamp !== undefined && !Number.isFinite(sinceTimestamp)) {
+      throw new ProviderRequestError(
+        400,
+        "since must be a valid ISO 8601 timestamp",
+      );
+    }
+    const result = await listRecords("/events", input, context, {
+      size: asOptionalIntegerString(input.size) ?? "50",
+      sort: asOptionalString(input.sort) ?? "createdAt",
+      sortDir: asOptionalSortDirection(input.sortDir) ?? "DESC",
+      type: asOptionalString(input.type),
+      category: asOptionalString(input.category),
+      createdAtFrom: since,
+    });
+    if (sinceTimestamp !== undefined) {
+      result.data = result.data.filter((event) => {
+        const createdAt = asOptionalString(asObject(event)?.createdAt);
+        const eventTimestamp =
+          createdAt === undefined ? Number.NaN : Date.parse(createdAt);
+        return (
+          Number.isFinite(eventTimestamp) && eventTimestamp >= sinceTimestamp
+        );
+      });
+      result.raw = { ...result.raw, data: result.data };
+    }
+    return result;
+  },
+  list_frameworks(input, context) {
+    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+    return listRecords(
+      `/workspaces/${workspaceId}/frameworks`,
+      input,
+      context,
+      {},
+    );
+  },
+  list_framework_requirements(input, context) {
+    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+    return listRecords(
+      `/workspaces/${workspaceId}/framework-requirements`,
+      input,
+      context,
+      {
+        size: asOptionalIntegerString(input.size) ?? "20",
+        includeTotalCount:
+          asOptionalBooleanString(input.includeTotalCount) ?? "true",
+      },
+    );
+  },
+  list_evidence_library(input, context) {
+    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+    return listRecords(
+      `/workspaces/${workspaceId}/evidence-library`,
+      input,
+      context,
+      {
+        name: asOptionalString(input.name),
+        "evidenceStatuses[]": asOptionalStringArray(input.statuses),
+        size: asOptionalIntegerString(input.size) ?? "50",
+        includeTotalCount:
+          asOptionalBooleanString(input.includeTotalCount) ?? "true",
+      },
+    );
+  },
+  get_evidence_item(input, context) {
+    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+    const evidenceId = requireInteger(input.evidenceId, "evidenceId");
+    return getRawRecord(
+      `/workspaces/${workspaceId}/evidence-library/${evidenceId}`,
+      input,
+      context,
+    );
+  },
+  list_risk_registers(input, context) {
+    return listRecords("/risk-registers", input, context, {});
+  },
+  list_monitoring_tests(input, context) {
+    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+    return listRecords(
+      `/workspaces/${workspaceId}/monitoring-tests`,
+      input,
+      context,
+      {
+        size: asOptionalIntegerString(input.size) ?? "50",
+        includeTotalCount:
+          asOptionalBooleanString(input.includeTotalCount) ?? "true",
+      },
+    );
+  },
+  get_monitoring_test(input, context) {
+    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+    const testId = requireInteger(input.testId, "testId");
+    return getRawRecord(
+      `/workspaces/${workspaceId}/monitoring-tests/${testId}`,
+      input,
+      context,
+    );
   },
 };
 
@@ -123,8 +267,14 @@ export async function validateDrataCredential(
 
   return {
     profile: {
-      accountId: readNonEmptyString(company.accountId) ?? readNonEmptyString(company.domain) ?? `drata_${region}`,
-      displayName: readNonEmptyString(company.name) ?? readNonEmptyString(company.domain) ?? "Drata API Key",
+      accountId:
+        readNonEmptyString(company.accountId) ??
+        readNonEmptyString(company.domain) ??
+        `drata_${region}`,
+      displayName:
+        readNonEmptyString(company.name) ??
+        readNonEmptyString(company.domain) ??
+        "Drata API Key",
     },
     grantedScopes: [],
     metadata: compactObject({
@@ -159,12 +309,13 @@ async function listRecords(
   input: Record<string, unknown>,
   context: DrataActionContext,
   extraQuery: Record<string, string | string[] | undefined>,
+  baseUrl = context.baseUrl,
 ) {
   const payload = requireObject(
     await requestDrataJson({
       path,
       apiKey: context.apiKey,
-      baseUrl: context.baseUrl,
+      baseUrl,
       fetcher: context.fetcher,
       mode: "execute",
       signal: context.signal,
@@ -181,6 +332,27 @@ async function listRecords(
     pagination: asObject(payload.pagination) ?? {},
     raw: payload,
   };
+}
+
+async function getRawRecord(
+  path: string,
+  input: Record<string, unknown>,
+  context: DrataActionContext,
+) {
+  return requireObject(
+    await requestDrataJson({
+      path,
+      apiKey: context.apiKey,
+      baseUrl: context.baseUrl,
+      fetcher: context.fetcher,
+      mode: "execute",
+      signal: context.signal,
+      query: {
+        "expand[]": asOptionalStringArray(input.expand),
+      },
+    }),
+    "Drata record response",
+  );
 }
 
 async function getRecord(
@@ -242,7 +414,11 @@ async function requestDrataJson(options: DrataRequestOptions) {
   return payload;
 }
 
-function mapDrataError(response: Response, payload: unknown, mode: "validate" | "execute") {
+function mapDrataError(
+  response: Response,
+  payload: unknown,
+  mode: "validate" | "execute",
+) {
   const message =
     readNonEmptyString(payload, "message") ??
     readNonEmptyString(payload, "error") ??
@@ -251,7 +427,11 @@ function mapDrataError(response: Response, payload: unknown, mode: "validate" | 
     return new ProviderRequestError(mode === "validate" ? 400 : 401, message);
   }
 
-  if (response.status === 400 || response.status === 404 || response.status === 412) {
+  if (
+    response.status === 400 ||
+    response.status === 404 ||
+    response.status === 412
+  ) {
     return new ProviderRequestError(response.status, message);
   }
 
@@ -267,7 +447,10 @@ async function readJson(response: Response) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new ProviderRequestError(502, "Drata returned an invalid JSON response");
+    throw new ProviderRequestError(
+      502,
+      "Drata returned an invalid JSON response",
+    );
   }
 }
 
@@ -282,6 +465,14 @@ function commonListQuery(input: Record<string, unknown>) {
   });
 }
 
+function legacyDrataBaseUrl(baseUrl: string): string {
+  const legacy = baseUrl.replace(/\/v2\/?$/u, "");
+  if (legacy === baseUrl) {
+    throw new ProviderRequestError(500, "Drata v2 base URL is malformed");
+  }
+  return legacy;
+}
+
 function normalizeDrataRegion(value: unknown): DrataRegion {
   if (typeof value !== "string" || value.trim() === "") {
     return drataDefaultRegion;
@@ -292,7 +483,10 @@ function normalizeDrataRegion(value: unknown): DrataRegion {
     return normalized;
   }
 
-  throw new ProviderRequestError(400, "drata region must be one of: us, eu, apac");
+  throw new ProviderRequestError(
+    400,
+    "drata region must be one of: us, eu, apac",
+  );
 }
 
 function requireObject(value: unknown, fieldName: string) {
@@ -337,11 +531,20 @@ function requirePathIdentifier(value: unknown, fieldName: string) {
     return value.trim();
   }
 
-  throw new ProviderRequestError(400, `${fieldName} must be an integer or non-empty string`);
+  throw new ProviderRequestError(
+    400,
+    `${fieldName} must be an integer or non-empty string`,
+  );
 }
 
 function asOptionalString(value: unknown) {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : undefined;
+}
+
+function asOptionalSortDirection(value: unknown): string | undefined {
+  return asOptionalString(value)?.toUpperCase();
 }
 
 function asOptionalStringArray(value: unknown) {
@@ -349,7 +552,9 @@ function asOptionalStringArray(value: unknown) {
     return undefined;
   }
 
-  const values = value.map((item) => (typeof item === "string" ? item.trim() : "")).filter((item) => item !== "");
+  const values = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item !== "");
   return values.length > 0 ? values : undefined;
 }
 
@@ -358,6 +563,9 @@ function asOptionalIntegerString(value: unknown) {
 }
 
 function readNonEmptyString(value: unknown, fieldName?: string) {
-  const source = fieldName && asObject(value) ? asObject(value)?.[fieldName] : value;
-  return typeof source === "string" && source.trim() !== "" ? source.trim() : undefined;
+  const source =
+    fieldName && asObject(value) ? asObject(value)?.[fieldName] : value;
+  return typeof source === "string" && source.trim() !== ""
+    ? source.trim()
+    : undefined;
 }

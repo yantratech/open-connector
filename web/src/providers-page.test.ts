@@ -6,7 +6,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppI18n } from "./i18n";
-import { clientConfigFieldsFor, initialClientConfigFieldValues, splitClientConfigFieldValues } from "./oauth-app-form";
+import {
+  clientConfigFieldsFor,
+  initialClientConfigFieldValues,
+  oauthClientSecretRequired,
+  splitClientConfigFieldValues,
+} from "./oauth-app-form";
 import {
   configurableConnectionsForProvider,
   connectionDeletePath,
@@ -115,6 +120,23 @@ describe("shouldEnableConnectionSubmit", () => {
     expect(
       shouldEnableConnectionSubmit({ type: "oauth2", scopes: [], tokenEndpointAuthMethod: "none" }, undefined, {
         clientId: "public-client",
+        clientSecret: "",
+        extraValues: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("allows private-key OAuth clients without a shared secret", () => {
+    const auth: AuthDefinition = {
+      type: "oauth2",
+      scopes: [],
+      tokenEndpointAuthMethod: "private_key_jwt",
+    };
+
+    expect(oauthClientSecretRequired(auth)).toBe(false);
+    expect(
+      shouldEnableConnectionSubmit(auth, undefined, {
+        clientId: "private-key-client",
         clientSecret: "",
         extraValues: {},
       }),

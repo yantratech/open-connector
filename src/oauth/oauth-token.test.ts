@@ -1,3 +1,4 @@
+import { decodeJwt, exportPKCS8, generateKeyPair } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { providerUserAgent } from "../providers/provider-runtime.ts";
 import { requestAuthorizationCodeToken, requestRefreshToken } from "./oauth-token.ts";
@@ -94,6 +95,57 @@ describe("OAuth token requests", () => {
     }
     expect(authorizationCodeInit.body.get("grant_type")).toBe("authorization_code");
     expect(refreshInit.body.get("grant_type")).toBe("refresh_token");
+  });
+
+  it("signs private_key_jwt assertions without sending a client secret", async () => {
+    const { privateKey } = await generateKeyPair("RS256", { extractable: true });
+    const privateKeyPem = await exportPKCS8(privateKey);
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ access_token: "access-token", refresh_token: "refresh-token" }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    await requestAuthorizationCodeToken({
+      ...authorizationCodeRequest,
+      clientSecret: "",
+      tokenEndpointAuthMethod: "private_key_jwt",
+      tokenRequestFields: { clientId: false, authorizationCode: { redirectUri: false } },
+      privateKeyJwt: {
+        audience: "https://revolut.com",
+        issuer: "runtime.example.com",
+        lifetimeSeconds: 300,
+        privateKey: privateKeyPem,
+      },
+    });
+
+    const body = fetcher.mock.calls[0]?.[1]?.body;
+    expect(body).toBeInstanceOf(URLSearchParams);
+    const form = body as URLSearchParams;
+    expect(form.get("client_assertion_type")).toBe("urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+    expect(form.has("client_id")).toBe(false);
+    expect(form.has("client_secret")).toBe(false);
+    expect(form.has("redirect_uri")).toBe(false);
+    expect(decodeJwt(form.get("client_assertion") ?? "")).toMatchObject({
+      aud: "https://revolut.com",
+      iss: "runtime.example.com",
+      sub: "client-id",
+    });
+  });
+
+  it("maps an invalid private key to a safe OAuth error", async () => {
+    await expect(
+      requestAuthorizationCodeToken({
+        ...authorizationCodeRequest,
+        clientSecret: "",
+        tokenEndpointAuthMethod: "private_key_jwt",
+        privateKeyJwt: {
+          audience: "https://revolut.com",
+          issuer: "runtime.example.com",
+          lifetimeSeconds: 300,
+          privateKey: "not a private key",
+        },
+      }),
+    ).rejects.toThrow("OAuth private-key JWT could not be signed");
   });
 
   it("rejects a redirecting token endpoint without following it, on Workers too", async () => {

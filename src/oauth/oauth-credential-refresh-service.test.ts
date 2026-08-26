@@ -14,6 +14,7 @@ const clientConfigs = {
     scopes: [],
   }),
   getConfig: async () => ({ clientId: "client-id", clientSecret: "client-secret", extra: {} }),
+  resolvePrivateKeyJwt: () => undefined,
   resolveEndpointUrl: (_service: string, endpointUrl: string) => endpointUrl,
 } as unknown as OAuthClientConfigService;
 

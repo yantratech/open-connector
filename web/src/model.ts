@@ -11,7 +11,7 @@ export type AuthDefinition =
   | {
       type: "oauth2";
       scopes: string[];
-      tokenEndpointAuthMethod?: "client_secret_basic" | "client_secret_post" | "none";
+      tokenEndpointAuthMethod?: "client_secret_basic" | "client_secret_post" | "private_key_jwt" | "none";
       clientConfigFields?: CredentialField[];
       clientSetup?: OAuthClientSetup;
     };

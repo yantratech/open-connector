@@ -133,7 +133,18 @@ export type OAuth2AuthDefinition = {
   /** Separator used when joining OAuth scopes. Defaults to a space. */
   scopeSeparator?: " " | ",";
   /** How the runtime sends client credentials to the token endpoint. */
-  tokenEndpointAuthMethod: "client_secret_basic" | "client_secret_post" | "none";
+  tokenEndpointAuthMethod: "client_secret_basic" | "client_secret_post" | "private_key_jwt" | "none";
+  /** RS256 client assertion configuration for providers that authenticate token requests with a private key. */
+  privateKeyJwt?: {
+    /** Key of the encrypted OAuth client `secretExtra` field containing a PKCS#8 PEM private key. */
+    privateKeyField: string;
+    /** JWT audience required by the provider token endpoint. */
+    audience: string;
+    /** Source of the JWT issuer claim. */
+    issuer: "redirect_uri_host";
+    /** Assertion lifetime in seconds. Defaults to 300 and may not exceed 600. */
+    lifetimeSeconds?: number;
+  };
   /** Token request body encoding. Defaults to OAuth form encoding. */
   tokenRequestFormat?: "form" | "json";
   /** Provider-specific OAuth token request field names. */

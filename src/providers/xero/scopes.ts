@@ -14,6 +14,8 @@ export const xeroSettingsReadScope = "accounting.settings.read";
 export const xeroContactsReadScope = "accounting.contacts.read";
 export const xeroInvoicesReadScope = "accounting.invoices.read";
 export const xeroBankTransactionsReadScope = "accounting.banktransactions.read";
+export const xeroPaymentsReadScope = "accounting.payments.read";
+export const xeroJournalsReadScope = "accounting.journals.read";
 export const xeroProfitAndLossReadScope = "accounting.reports.profitandloss.read";
 export const xeroBalanceSheetReadScope = "accounting.reports.balancesheet.read";
 export const xeroContactsWriteScope = "accounting.contacts";
@@ -35,6 +37,8 @@ export const xeroReadOnlyScopes: string[] = [
   xeroContactsReadScope,
   xeroInvoicesReadScope,
   xeroBankTransactionsReadScope,
+  xeroPaymentsReadScope,
+  xeroJournalsReadScope,
   xeroProfitAndLossReadScope,
   xeroBalanceSheetReadScope,
 ];

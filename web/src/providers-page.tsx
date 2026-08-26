@@ -48,6 +48,7 @@ import {
 import {
   clientConfigFieldsFor,
   initialClientConfigFieldValues,
+  oauthClientSecretRequired,
   OAuthAppDialog,
   splitClientConfigFieldValues,
 } from "./oauth-app-form";
@@ -1097,7 +1098,7 @@ export function shouldEnableConnectionSubmit(
   if (!manualValues.clientId.trim()) {
     return false;
   }
-  if (auth.tokenEndpointAuthMethod !== "none" && !manualValues.clientSecret.trim()) {
+  if (oauthClientSecretRequired(auth) && !manualValues.clientSecret.trim()) {
     return false;
   }
   return clientConfigFieldsFor(auth).every(
@@ -1570,15 +1571,17 @@ function ConnectionForm(props: ConnectionFormProps): ReactNode {
             <span>{t("providers.oauthClientSettings.clientId")}</span>
             <Input value={manualClientId} onChange={(event) => setManualClientId(event.target.value)} required />
           </Label>
-          <Label className="field">
-            <span>{t("providers.oauthClientSettings.clientSecret")}</span>
-            <Input
-              type="password"
-              value={manualClientSecret}
-              onChange={(event) => setManualClientSecret(event.target.value)}
-              required={props.auth.tokenEndpointAuthMethod !== "none"}
-            />
-          </Label>
+          {oauthClientSecretRequired(props.auth) ? (
+            <Label className="field">
+              <span>{t("providers.oauthClientSettings.clientSecret")}</span>
+              <Input
+                type="password"
+                value={manualClientSecret}
+                onChange={(event) => setManualClientSecret(event.target.value)}
+                required
+              />
+            </Label>
+          ) : null}
           {manualClientConfigFields.map((field) => (
             <CredentialInput
               key={field.key}

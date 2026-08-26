@@ -1,5 +1,6 @@
 import type { OAuth2AuthDefinition, ResolvedCredential } from "../core/types.ts";
 
+import { importPKCS8, SignJWT } from "jose";
 import { optionalRecord, optionalString, requiredString } from "../core/cast.ts";
 import { readBoundedResponseBytes } from "../core/request.ts";
 import { providerFetch, providerUserAgent } from "../providers/provider-runtime.ts";
@@ -16,9 +17,17 @@ export interface OAuthTokenRequestOptions {
   clientSecret: string;
   responseEnvelope?: OAuth2AuthDefinition["tokenResponseEnvelope"];
   tokenRequestFields?: OAuth2AuthDefinition["tokenRequestFields"];
-  tokenEndpointAuthMethod: "client_secret_basic" | "client_secret_post" | "none";
+  tokenEndpointAuthMethod: "client_secret_basic" | "client_secret_post" | "private_key_jwt" | "none";
+  privateKeyJwt?: OAuthPrivateKeyJwtInput;
   tokenRequestFormat?: "form" | "json";
   tokenUrl: string;
+}
+
+export interface OAuthPrivateKeyJwtInput {
+  audience: string;
+  issuer: string;
+  lifetimeSeconds: number;
+  privateKey: string;
 }
 
 interface AuthorizationCodeTokenRequest extends OAuthTokenRequestOptions {
@@ -81,6 +90,12 @@ async function requestToken(input: TokenRequest): Promise<Extract<ResolvedCreden
     if (clientSecretField !== false) {
       fields[clientSecretField ?? "client_secret"] = input.clientSecret;
     }
+  } else if (input.tokenEndpointAuthMethod === "private_key_jwt") {
+    if (!input.privateKeyJwt) {
+      throw input.createError("OAuth private-key JWT configuration is missing.");
+    }
+    fields.client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+    fields.client_assertion = await createPrivateKeyJwt(input.clientId, input.privateKeyJwt, input.createError);
   }
 
   if (input.tokenRequestFormat === "json") {
@@ -141,6 +156,25 @@ async function requestToken(input: TokenRequest): Promise<Extract<ResolvedCreden
     },
     metadata: createTokenMetadata(payload),
   };
+}
+
+async function createPrivateKeyJwt(
+  clientId: string,
+  input: OAuthPrivateKeyJwtInput,
+  createError: OAuthTokenErrorFactory,
+): Promise<string> {
+  try {
+    const key = await importPKCS8(input.privateKey, "RS256");
+    return await new SignJWT({})
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuer(input.issuer)
+      .setSubject(clientId)
+      .setAudience(input.audience)
+      .setExpirationTime(Math.floor(Date.now() / 1000) + input.lifetimeSeconds)
+      .sign(key);
+  } catch {
+    throw createError("OAuth private-key JWT could not be signed. Check the configured PKCS#8 PEM private key.");
+  }
 }
 
 /** Read a bounded token response and map body-stream failures to a safe OAuth error. */
