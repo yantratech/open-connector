@@ -4,7 +4,7 @@ import type { JsonSchema } from "../../core/types.ts";
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
 
-const service = "volcengine_ark";
+const service = "seedance";
 
 export const defaultSeedanceModel = "doubao-seedance-2-0-260128";
 export const fastSeedanceModel = "doubao-seedance-2-0-fast-260128";
@@ -12,7 +12,7 @@ export const fastSeedanceModel = "doubao-seedance-2-0-fast-260128";
 const taskIdSchema = s.nonEmptyString("The opaque Seedance task identifier returned by the selected connection.");
 const modelSchema: JsonSchema = {
   ...s.withDefault(
-    s.nonEmptyString("The Volcengine Ark Model ID or Endpoint ID used for Seedance video generation."),
+    s.nonEmptyString("The Seedance Model ID or Endpoint ID used for Seedance video generation."),
     defaultSeedanceModel,
   ),
   examples: [defaultSeedanceModel],
@@ -57,7 +57,7 @@ const audioSchema = s.object(
   { required: ["url"] },
 );
 const errorSchema = s.object(
-  "The terminal error reported by Volcengine Ark when the task did not succeed.",
+  "The terminal error reported by Seedance when the task did not succeed.",
   {
     code: s.string("The upstream error code when provided."),
     message: s.string("The upstream error message when provided."),
@@ -201,29 +201,29 @@ const submitInputSchema = s.requireAnyProperty(
 );
 
 const lifecycle = {
-  startActionId: "volcengine_ark.submit_seedance_video_generation",
-  statusActionId: "volcengine_ark.get_seedance_video_generation",
+  startActionId: "seedance.submit_video_generation",
+  statusActionId: "seedance.get_video_generation",
 };
 
-export const volcengineArkActions: ProviderActionDefinition[] = [
+export const seedanceActions: ProviderActionDefinition[] = [
   defineProviderAction(service, {
-    name: "submit_seedance_video_generation",
-    description: "Submit an asynchronous Seedance video generation task through Volcengine Ark.",
+    name: "submit_video_generation",
+    description: "Submit an asynchronous Seedance video generation task through Seedance.",
     followUpActions: [lifecycle.statusActionId],
     asyncLifecycle: lifecycle,
     inputSchema: submitInputSchema,
     outputSchema: s.actionOutput({ taskId: taskIdSchema }, "The submitted Seedance task handle."),
   }),
   defineProviderAction(service, {
-    name: "get_seedance_video_generation",
+    name: "get_video_generation",
     description: "Retrieve a Seedance task state and its generated video when available.",
     asyncLifecycle: lifecycle,
     inputSchema: s.actionInput({ taskId: taskIdSchema }, ["taskId"], "A Seedance task lookup."),
     outputSchema: seedanceTaskSchema,
   }),
   defineProviderAction(service, {
-    name: "list_seedance_video_generations",
-    description: "List Seedance video generation tasks visible to the configured Volcengine Ark API key.",
+    name: "list_video_generations",
+    description: "List Seedance video generation tasks visible to the configured Seedance API key.",
     inputSchema: s.actionInput(
       {
         pageNumber: s.integer("The result page number.", { minimum: 1, maximum: 500 }),
@@ -236,7 +236,7 @@ export const volcengineArkActions: ProviderActionDefinition[] = [
           "failed",
         ]),
         taskIds: s.array("Filter by exact Seedance task identifiers.", taskIdSchema),
-        model: s.nonEmptyString("Filter by an exact Volcengine Ark Endpoint ID."),
+        model: s.nonEmptyString("Filter by an exact Seedance Endpoint ID."),
         serviceTier: s.stringEnum("Filter by the processing service tier.", ["default", "flex"]),
       },
       [],
@@ -251,13 +251,13 @@ export const volcengineArkActions: ProviderActionDefinition[] = [
     ),
   }),
   defineProviderAction(service, {
-    name: "delete_seedance_video_generation",
-    description: "Cancel a queued Seedance task or delete a task according to Volcengine Ark task-state semantics.",
+    name: "delete_video_generation",
+    description: "Cancel a queued Seedance task or delete a task according to Seedance task-state semantics.",
     inputSchema: s.actionInput({ taskId: taskIdSchema }, ["taskId"], "A Seedance task cancellation or deletion."),
     outputSchema: s.actionOutput(
       {
         taskId: taskIdSchema,
-        accepted: s.boolean("Whether Volcengine Ark accepted the cancellation or deletion."),
+        accepted: s.boolean("Whether Seedance accepted the cancellation or deletion."),
       },
       "The Seedance cancellation or deletion result.",
     ),

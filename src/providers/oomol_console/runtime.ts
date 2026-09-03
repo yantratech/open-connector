@@ -4,6 +4,7 @@ import type { ConnectionActionPermission, ConnectionPermissionGroupsState } from
 import type { OomolConsoleEndpoints } from "./request.ts";
 
 import { optionalNumber, optionalRawString } from "../../core/cast.ts";
+import { randomUUIDv7 } from "../../core/uuid-v7.ts";
 import { ProviderRequestError } from "../provider-runtime.ts";
 import {
   parseConnectionPermissionGroups,
@@ -12,7 +13,6 @@ import {
   toPermissionGroupsView,
 } from "./permission-groups.ts";
 import { requestOomolConsole, requestOomolConsoleWithResponse } from "./request.ts";
-import { randomUUIDv7 } from "./uuid-v7.ts";
 
 export interface OomolConsoleContext {
   apiKey: string;

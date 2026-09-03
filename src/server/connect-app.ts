@@ -62,7 +62,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
   });
   const connections = new ConnectionService({
     catalog: options.catalog,
-    oauthCredentials: new OAuthCredentialRefreshService(oauthClientConfigs),
+    oauthCredentials: new OAuthCredentialRefreshService(oauthClientConfigs, options.providerLoader),
     providerLoader: options.providerLoader,
     store: options.runtimeDatabase.connectionStore,
     logger: options.logger,
@@ -87,6 +87,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       oauthFlow: new OAuthFlowService({
         clientConfigs: oauthClientConfigs,
         connections,
+        providerLoader: options.providerLoader,
         states: options.runtimeDatabase.oauthStateStore,
         secretCodec: options.secretCodec,
         isCustomClientConfigAllowed,

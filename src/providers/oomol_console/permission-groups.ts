@@ -1,4 +1,4 @@
-import { randomUUIDv7 } from "./uuid-v7.ts";
+import { randomUUIDv7 } from "../../core/uuid-v7.ts";
 
 type JsonPrimitive = boolean | number | string | null;
 type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;

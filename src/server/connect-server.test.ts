@@ -3671,7 +3671,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
   const catalog = createCatalogStore(providers, {
     executableActionIds: ["example.echo"],
   });
-  const providerLoader = options.providerLoader ?? new EmptyProviderLoader();
+  const providerLoader: IProviderLoader = options.providerLoader ?? new EmptyProviderLoader();
   const idempotency = options.idempotency ?? new MemoryIdempotencyStore();
   const runtimeTokens = options.runtimeTokens ?? new RuntimeTokenService(new MemoryRuntimeTokenStore());
   const runs = options.runs ?? new MemoryRunLogStore();
@@ -3717,6 +3717,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     oauthFlow: new OAuthFlowService({
       clientConfigs,
       connections,
+      providerLoader,
       states: new MemoryOAuthStateStore(),
       secretCodec: options.secretCodec,
       isCustomClientConfigAllowed,
@@ -3727,7 +3728,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     uploadTransitFile: options.uploadTransitFile,
     runtimeTokens,
     runtimePolicyStore: options.runtimePolicyStore ?? new MemoryRuntimePolicyStore(),
-    registerStaticRoutes: staticRoot ? (app) => registerStaticRoutes(app, staticRoot) : undefined,
+    registerStaticRoutes: staticRoot ? (app) => registerStaticRoutes(app, { root: staticRoot }) : undefined,
     auth: {
       ...options.auth,
       hasRuntimeTokens: async () => (await runtimeTokens.listTokens()).length > 0,

@@ -1,10 +1,9 @@
 import type { TikHubEndpointMethod } from "./endpoint-policy.ts";
-import type { TikHubDiscoveredEndpoint, TikHubLlmsIndexEntry } from "./endpoint-types.ts";
+import type { TikHubDiscoveredEndpoint } from "./endpoint-types.ts";
 
 import { createHash } from "node:crypto";
-import { parseDocument } from "yaml";
+import { ProviderRequestError } from "../provider-runtime.ts";
 import { matchTikHubEndpointPolicy } from "./endpoint-policy.ts";
-import { TikHubRequestError } from "./errors.ts";
 
 const tikhubOpenApiMaxSchemaDepth = 64;
 const tikhubOpenApiMaxSchemaNodes = 5_000;
@@ -16,62 +15,100 @@ interface OpenApiNormalizationBudget {
   refResolutions: number;
 }
 
-export function parseTikHubEndpointDocument(
-  entry: TikHubLlmsIndexEntry,
-  markdown: string,
-): TikHubDiscoveredEndpoint | undefined {
-  const yamlSource = extractOpenApiYaml(markdown);
-  const document = parseDocument(yamlSource, {
-    intAsBigInt: true,
-    prettyErrors: false,
-    strict: true,
-  });
-  if (document.errors.length > 0) {
-    throw providerDocumentError(entry.endpointId, "contains invalid OpenAPI YAML");
-  }
-
+export function parseTikHubOpenApiCatalog(content: string): TikHubDiscoveredEndpoint[] {
   let root: unknown;
   try {
-    root = document.toJS({ maxAliasCount: 25 });
+    root = JSON.parse(content) as unknown;
   } catch {
-    throw providerDocumentError(entry.endpointId, "contains unsafe YAML aliases");
+    throw providerDocumentError("catalog", "contains invalid OpenAPI JSON");
   }
-  const rootRecord = requireRecord(root, entry.endpointId, "OpenAPI document");
-  const operation = readSingleOperation(rootRecord, entry.endpointId);
-  const policy = matchTikHubEndpointPolicy(operation.method, operation.path, entry.category);
+  const rootRecord = requireRecord(root, "catalog", "OpenAPI document");
+  const paths = requireRecord(rootRecord.paths, "catalog", "paths");
+  const endpoints: TikHubDiscoveredEndpoint[] = [];
+  for (const [path, rawPathItem] of Object.entries(paths)) {
+    let pathItem: Record<string, unknown>;
+    try {
+      pathItem = requireRecord(rawPathItem, path, `path item ${path}`);
+    } catch (error) {
+      if (!(error instanceof ProviderRequestError)) {
+        throw error;
+      }
+      continue;
+    }
+    for (const methodName of ["get", "post"] as const) {
+      if (pathItem[methodName] === undefined) {
+        continue;
+      }
+      let endpoint: TikHubDiscoveredEndpoint | undefined;
+      try {
+        const operation = requireRecord(pathItem[methodName], path, `${methodName} operation`);
+        endpoint = parseTikHubOpenApiOperation({
+          root: rootRecord,
+          pathItem,
+          operation,
+          method: methodName.toUpperCase() as TikHubEndpointMethod,
+          path,
+        });
+      } catch (error) {
+        if (!(error instanceof ProviderRequestError)) {
+          throw error;
+        }
+        endpoint = undefined;
+      }
+      if (endpoint) {
+        endpoints.push(endpoint);
+      }
+    }
+  }
+  return endpoints;
+}
+
+interface TikHubOpenApiOperationInput {
+  root: Record<string, unknown>;
+  pathItem: Record<string, unknown>;
+  operation: Record<string, unknown>;
+  method: TikHubEndpointMethod;
+  path: string;
+}
+
+function parseTikHubOpenApiOperation(input: TikHubOpenApiOperationInput): TikHubDiscoveredEndpoint | undefined {
+  const category = readOperationCategory(input.operation);
+  const title = readNonEmptyString(input.operation.summary);
+  const operationId = readNonEmptyString(input.operation.operationId);
+  const endpointName = `${input.method} ${input.path}`;
+  if (!category || !title || !operationId) {
+    throw providerDocumentError(endpointName, "does not declare category, summary, and operationId");
+  }
+  const policy = matchTikHubEndpointPolicy(input.method, input.path, category);
   if (!policy) {
     return undefined;
   }
 
   const budget: OpenApiNormalizationBudget = { schemaNodes: 0, refResolutions: 0 };
   const parameters = readOperationParameters({
-    root: rootRecord,
-    pathItem: operation.pathItem,
-    operation: operation.value,
-    endpointId: entry.endpointId,
+    root: input.root,
+    pathItem: input.pathItem,
+    operation: input.operation,
+    endpointId: endpointName,
     budget,
   });
-  validatePathParameters(policy.placeholders, parameters, entry.endpointId);
+  validatePathParameters(policy.placeholders, parameters, endpointName);
   const body = readRequestBody({
-    root: rootRecord,
-    operation: operation.value,
-    method: operation.method,
-    endpointId: entry.endpointId,
+    root: input.root,
+    operation: input.operation,
+    method: input.method,
+    endpointId: endpointName,
     budget,
   });
   const requestSchema = buildRequestSchema(parameters, body);
   if (new TextEncoder().encode(JSON.stringify(requestSchema)).byteLength > tikhubNormalizedRequestSchemaMaxBytes) {
-    throw providerDocumentError(entry.endpointId, "produces an oversized request schema");
-  }
-  const operationId = readNonEmptyString(operation.value.operationId);
-  if (!operationId) {
-    throw providerDocumentError(entry.endpointId, "does not declare operationId");
+    throw providerDocumentError(endpointName, "produces an oversized request schema");
   }
 
   const contractHash = sha256Hex(
     stableJsonStringify({
-      method: operation.method,
-      path: operation.path,
+      method: input.method,
+      path: input.path,
       parameters: parameters
         .map((parameter) => ({
           in: parameter.location,
@@ -90,102 +127,25 @@ export function parseTikHubEndpointDocument(
   );
 
   return {
-    ...entry,
-    description: readNonEmptyString(operation.value.description)?.slice(0, 4_000) ?? entry.description,
+    category,
+    title,
+    description: readNonEmptyString(input.operation.description)?.slice(0, 4_000) ?? "",
     operationId,
-    method: operation.method,
-    path: operation.path,
+    method: input.method,
+    path: input.path,
     requiredScope: policy.requiredScope,
     contractHash,
     requestSchema,
   };
 }
 
-function extractOpenApiYaml(markdown: string) {
-  const lines = markdown.split("\n");
-  const headingIndex = lines.findIndex((line) => line.trim() === "## OpenAPI Specification");
-  if (headingIndex < 0) {
-    throw new TikHubRequestError(
-      "provider_error",
-      "TikHub endpoint document does not contain an OpenAPI specification",
-      502,
-    );
+function readOperationCategory(operation: Record<string, unknown>) {
+  const folder = readNonEmptyString(operation["x-apifox-folder"]);
+  if (folder) {
+    return folder;
   }
-
-  let fenceStart = -1;
-  for (let index = headingIndex + 1; index < lines.length; index += 1) {
-    const sourceLine = lines[index]!;
-    const line = sourceLine.trim().toLowerCase();
-    if (countLeadingSpaces(sourceLine) <= 3 && (line === "```yaml" || line === "```yml")) {
-      fenceStart = index;
-      break;
-    }
-    if (line.startsWith("## ")) {
-      break;
-    }
-  }
-  if (fenceStart < 0) {
-    throw new TikHubRequestError(
-      "provider_error",
-      "TikHub endpoint document does not contain an OpenAPI YAML fence",
-      502,
-    );
-  }
-
-  const fenceEnd = lines.findIndex(
-    (line, index) => index > fenceStart && countLeadingSpaces(line) <= 3 && line.trim() === "```",
-  );
-  if (fenceEnd < 0) {
-    throw new TikHubRequestError(
-      "provider_error",
-      "TikHub endpoint document contains an unterminated OpenAPI YAML fence",
-      502,
-    );
-  }
-  return lines.slice(fenceStart + 1, fenceEnd).join("\n");
-}
-
-function countLeadingSpaces(value: string) {
-  let count = 0;
-  while (value[count] === " ") {
-    count += 1;
-  }
-  return count;
-}
-
-function readSingleOperation(root: Record<string, unknown>, endpointId: string) {
-  const paths = requireRecord(root.paths, endpointId, "paths");
-  const operations: Array<{
-    method: TikHubEndpointMethod;
-    path: string;
-    pathItem: Record<string, unknown>;
-    value: Record<string, unknown>;
-  }> = [];
-  const methodNames = ["get", "post", "put", "patch", "delete", "options", "head", "trace"];
-
-  for (const [path, rawPathItem] of Object.entries(paths)) {
-    const pathItem = requireRecord(rawPathItem, endpointId, `path item ${path}`);
-    for (const methodName of methodNames) {
-      const rawOperation = pathItem[methodName];
-      if (rawOperation === undefined) {
-        continue;
-      }
-      if (methodName !== "get" && methodName !== "post") {
-        throw providerDocumentError(endpointId, `uses unsupported method ${methodName}`);
-      }
-      operations.push({
-        method: methodName.toUpperCase() as TikHubEndpointMethod,
-        path,
-        pathItem,
-        value: requireRecord(rawOperation, endpointId, `${methodName} operation`),
-      });
-    }
-  }
-
-  if (operations.length !== 1) {
-    throw providerDocumentError(endpointId, "must contain exactly one operation");
-  }
-  return operations[0]!;
+  const tags = operation.tags;
+  return Array.isArray(tags) ? readNonEmptyString(tags[0]) : undefined;
 }
 
 interface NormalizedParameter {
@@ -396,13 +356,11 @@ function sanitizeSchema(
   depth = 0,
 ): Record<string, unknown> {
   consumeSchemaBudget(budget, depth, endpointId);
-  const resolved = resolveLocalObject(rawSchema, root, endpointId, refStack, budget);
+  const resolved = resolveLocalObject(rawSchema, root, endpointId, refStack, budget, true);
   const result: Record<string, unknown> = {};
-  let nullable = false;
-  let exclusiveMinimumFlag: boolean | undefined;
-  let exclusiveMaximumFlag: boolean | undefined;
   const ignoredAnnotations = new Set([
     "title",
+    "summary",
     "example",
     "examples",
     "deprecated",
@@ -417,6 +375,8 @@ function sanitizeSchema(
     "default",
     "minimum",
     "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
     "multipleOf",
     "minLength",
     "maxLength",
@@ -430,25 +390,6 @@ function sanitizeSchema(
 
   for (const [key, value] of Object.entries(resolved)) {
     if (ignoredAnnotations.has(key) || key.startsWith("x-")) {
-      continue;
-    }
-    if (key === "nullable") {
-      if (typeof value !== "boolean") {
-        throw providerDocumentError(endpointId, "uses an invalid nullable keyword");
-      }
-      nullable = value;
-      continue;
-    }
-    if (key === "exclusiveMinimum" || key === "exclusiveMaximum") {
-      if (typeof value === "boolean") {
-        if (key === "exclusiveMinimum") {
-          exclusiveMinimumFlag = value;
-        } else {
-          exclusiveMaximumFlag = value;
-        }
-      } else {
-        result[key] = requireJsonValue(value, endpointId, `schema keyword ${key}`, budget, depth + 1);
-      }
       continue;
     }
     if (scalarKeywords.has(key)) {
@@ -522,34 +463,8 @@ function sanitizeSchema(
   ) {
     throw providerDocumentError(endpointId, "uses an unsupported schema type");
   }
-  normalizeExclusiveBound(result, "minimum", "exclusiveMinimum", exclusiveMinimumFlag, endpointId);
-  normalizeExclusiveBound(result, "maximum", "exclusiveMaximum", exclusiveMaximumFlag, endpointId);
   validateNormalizedSchemaKeywords(result, endpointId);
-  if (!nullable) {
-    return result;
-  }
-  return {
-    anyOf: [result, { type: "null" }],
-    ...(typeof result.description === "string" ? { description: result.description } : {}),
-  };
-}
-
-function normalizeExclusiveBound(
-  schema: Record<string, unknown>,
-  inclusiveKeyword: "minimum" | "maximum",
-  exclusiveKeyword: "exclusiveMinimum" | "exclusiveMaximum",
-  flag: boolean | undefined,
-  endpointId: string,
-) {
-  if (flag !== true) {
-    return;
-  }
-  const bound = schema[inclusiveKeyword];
-  if (typeof bound !== "number" || !Number.isFinite(bound)) {
-    throw providerDocumentError(endpointId, `${exclusiveKeyword}: true requires a finite ${inclusiveKeyword}`);
-  }
-  schema[exclusiveKeyword] = bound;
-  delete schema[inclusiveKeyword];
+  return result;
 }
 
 function validateNormalizedSchemaKeywords(schema: Record<string, unknown>, endpointId: string) {
@@ -582,12 +497,17 @@ function resolveLocalObject(
   endpointId: string,
   refStack: Set<string>,
   budget: OpenApiNormalizationBudget,
-) {
+  schemaReference = false,
+): Record<string, unknown> {
   const record = requireRecord(value, endpointId, "referenced OpenAPI value");
   if (record.$ref === undefined) {
     return record;
   }
-  if (Object.keys(record).length !== 1 || typeof record.$ref !== "string") {
+  const siblingKeys = Object.keys(record).filter((key) => key !== "$ref");
+  if (
+    typeof record.$ref !== "string" ||
+    siblingKeys.some((key) => !isAllowedReferenceSibling(key, record[key], schemaReference))
+  ) {
     throw providerDocumentError(endpointId, "contains an invalid $ref object");
   }
   const reference = record.$ref;
@@ -609,10 +529,34 @@ function resolveLocalObject(
     current = currentRecord[segment];
   }
   const resolved = requireRecord(current, endpointId, `reference ${reference}`);
-  if (resolved.$ref !== undefined) {
-    return resolveLocalObject(resolved, root, endpointId, refStack, budget);
+  const resolvedValue: Record<string, unknown> =
+    resolved.$ref === undefined
+      ? resolved
+      : resolveLocalObject(resolved, root, endpointId, refStack, budget, schemaReference);
+  return Object.fromEntries([...Object.entries(resolvedValue), ...siblingKeys.map((key) => [key, record[key]])]);
+}
+
+function isAllowedReferenceSibling(key: string, value: unknown, schemaReference: boolean) {
+  if (key === "summary" || key === "description") {
+    return typeof value === "string";
   }
-  return resolved;
+  if (!schemaReference) {
+    return false;
+  }
+  if (
+    key === "title" ||
+    key === "example" ||
+    key === "examples" ||
+    key === "deprecated" ||
+    key === "readOnly" ||
+    key === "writeOnly" ||
+    key === "externalDocs" ||
+    key === "default" ||
+    key.startsWith("x-")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function consumeSchemaBudget(budget: OpenApiNormalizationBudget, depth: number, endpointId: string) {
@@ -681,16 +625,7 @@ function requireJsonValue(
   depth: number,
 ): unknown {
   consumeSchemaBudget(budget, depth, endpointId);
-  if (typeof value === "bigint") {
-    if (value < BigInt(Number.MIN_SAFE_INTEGER) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw providerDocumentError(endpointId, `${name} contains an unsafe integer`);
-    }
-    return Number(value);
-  }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw providerDocumentError(endpointId, `${name} contains a non-finite number`);
-    }
     return value;
   }
   if (value === null || typeof value === "string" || typeof value === "boolean") {
@@ -716,5 +651,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function providerDocumentError(endpointId: string, reason: string) {
-  return new TikHubRequestError("provider_error", `TikHub endpoint document ${endpointId} ${reason}`, 502);
+  return new ProviderRequestError(502, `TikHub OpenAPI operation ${endpointId} ${reason}`);
 }

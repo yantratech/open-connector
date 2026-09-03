@@ -1,5 +1,5 @@
-import { randomUUID as randomUUIDv7 } from "node:crypto";
 import { optionalNumber as asOptionalNumber, optionalString as asOptionalString } from "../../core/cast.ts";
+import { randomUUIDv7 } from "../../core/uuid-v7.ts";
 import { ProviderRequestError, providerUserAgent as connectorUserAgent } from "../provider-runtime.ts";
 
 export const walmartMarketplaceApiBaseUrl = "https://marketplace.walmartapis.com";

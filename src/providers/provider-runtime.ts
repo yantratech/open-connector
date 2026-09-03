@@ -226,6 +226,7 @@ export interface ApiKeyActionRequest {
 export interface OAuthProviderContext {
   accessToken: string;
   tokenType?: string;
+  accountId?: string;
   providerSecret?: Record<string, unknown>;
   /** Runtime-owned OAuth metadata, including the configured provider app's non-secret extra fields. */
   metadata?: Record<string, unknown>;
@@ -1099,6 +1100,7 @@ export function defineOAuthProviderExecutors(
       const providerContext: OAuthProviderContext = {
         accessToken: credential.accessToken,
         tokenType: credential.tokenType,
+        accountId: credential.profile.accountId,
         providerSecret: credential.providerSecret,
         metadata: credential.metadata,
         fetcher,

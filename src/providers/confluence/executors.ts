@@ -145,10 +145,18 @@ async function validateConfluenceOAuthCredential(
   const resources = readAccessibleResources(resourcesPayload);
   const resource = pickPrimaryResource(resources);
   if (!resource) {
-    throw new ProviderRequestError(
-      400,
-      "Confluence authorization does not include an accessible Confluence Cloud site",
-    );
+    return {
+      profile: {
+        accountId: "confluence",
+        displayName: "Confluence Cloud",
+        grantedScopes: [],
+      },
+      grantedScopes: [],
+      metadata: {
+        resourceCount: resources.length,
+        validationEndpoint: "/oauth/token/accessible-resources",
+      },
+    };
   }
 
   const cloudId = requiredString(resource.id, "cloudId", confluenceResponseError);
@@ -252,6 +260,11 @@ function readAccessibleResources(payload: unknown): ConfluenceAccessibleResource
     const resource = optionalRecord(item);
     if (!resource) {
       throw new ProviderRequestError(502, "Confluence accessible resource must be an object");
+    }
+    requiredString(resource.id, "accessible resource id", confluenceResponseError);
+    requiredString(resource.url, "accessible resource URL", confluenceResponseError);
+    if (!optionalStringArray(resource.scopes)) {
+      throw confluenceResponseError("accessible resource scopes must be an array of strings");
     }
     return resource;
   });

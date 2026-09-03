@@ -3,7 +3,7 @@ import type { ServerType } from "@hono/node-server";
 
 import { S3Client } from "@aws-sdk/client-s3";
 import { serve } from "@hono/node-server";
-import { access, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { loadCatalog } from "../catalog-store.ts";
 import { ActionPolicyService, parseActionPolicyList } from "../core/action-policy.ts";
@@ -23,7 +23,12 @@ import { S3TransitFileService } from "./files/s3-transit-files.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { logger } from "./logger.ts";
 import { createSecretCodec } from "./secrets/secret-codec.ts";
-import { createNodeRuntimeDatabase } from "./storage/node-runtime-database.ts";
+import { resolveServerAssets } from "./server-assets.ts";
+import {
+  createNodeRuntimeDatabase,
+  migratePostgresRuntimeDatabase,
+  sqliteMigrationsNotice,
+} from "./storage/node-runtime-database.ts";
 import { DEFAULT_RUN_LIMIT } from "./storage/runtime-store.ts";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -37,10 +42,22 @@ const databaseUrl = optionalEnv("OOMOL_CONNECT_DATABASE_URL");
 const databasePoolMax = readPositiveIntegerEnv("OOMOL_CONNECT_DATABASE_POOL_MAX", 10);
 const databaseConnectTimeoutMs = readPositiveIntegerEnv("OOMOL_CONNECT_DATABASE_CONNECT_TIMEOUT_MS", 10_000);
 
+// The standalone binary embeds migrations/postgresql, but the PostgreSQL startup validator refuses to serve until
+// they are applied and its error text points at `npm run runtime:migrate`, which a binary user does not have.
+// `migrate` applies them from the same source the validator reads, so validation and execution cannot diverge.
+const [command, ...rest] = process.argv.slice(2);
+
 try {
-  await main();
+  if (command === undefined) {
+    await main();
+  } else if (command === "migrate" && rest.length === 0) {
+    await runMigrateCommand();
+  } else {
+    console.error("Usage: open-connector [migrate]");
+    process.exitCode = 1;
+  }
 } catch (error) {
-  logger.error({ err: error }, "connect server failed");
+  logger.error({ err: error }, command === "migrate" ? "migrate failed" : "connect server failed");
   process.exitCode = 1;
 }
 
@@ -65,8 +82,8 @@ async function main(): Promise<void> {
   const allowedCustomOAuth = parseActionPolicyList(process.env.OOMOL_CONNECT_ALLOWED_CUSTOM_OAUTH);
 
   await mkdir(dataDir, { recursive: true });
-  const staticRoot = await resolveStaticRoot(join(process.cwd(), "dist/web"));
-  const catalog = await loadCatalog(undefined, {
+  const assets = await resolveServerAssets();
+  const catalog = await loadCatalog(assets.catalogDir, {
     executableServices: Object.keys(executorModules),
   });
   const runtimeDatabase = databaseUrl
@@ -78,6 +95,7 @@ async function main(): Promise<void> {
         runLimit,
         poolMax: databasePoolMax,
         connectionTimeoutMs: databaseConnectTimeoutMs,
+        migrations: assets.migrations,
       })
     : await createNodeRuntimeDatabase({
         backend: "sqlite",
@@ -85,6 +103,7 @@ async function main(): Promise<void> {
         logger,
         secretCodec,
         runLimit,
+        migrations: assets.migrations,
       });
 
   try {
@@ -106,7 +125,7 @@ async function main(): Promise<void> {
       verifyRuntimeJwt,
       actionPolicy,
       allowedCustomOAuth,
-      registerStaticRoutes: (app) => registerStaticRoutes(app, staticRoot),
+      registerStaticRoutes: (app) => registerStaticRoutes(app, { root: assets.staticRoot, embedded: assets.embedded }),
       logger,
     });
 
@@ -133,7 +152,7 @@ async function main(): Promise<void> {
             "runtime data encryption is disabled; set OOMOL_CONNECT_ENCRYPTION_KEY to encrypt stored credentials, Marketplace API keys, OAuth client configuration, pending OAuth state, and completed idempotent action responses",
           );
         }
-        if (!staticRoot) {
+        if (!assets.staticRoot) {
           logger.warn("web console assets are not built; use http://localhost:5173 for local console development");
         }
       },
@@ -143,6 +162,21 @@ async function main(): Promise<void> {
   } finally {
     await runtimeDatabase.close();
   }
+}
+
+async function runMigrateCommand(): Promise<void> {
+  if (!databaseUrl) {
+    logger.info(sqliteMigrationsNotice);
+    return;
+  }
+
+  const assets = await resolveServerAssets();
+  await migratePostgresRuntimeDatabase({
+    connectionString: databaseUrl,
+    connectionTimeoutMs: databaseConnectTimeoutMs,
+    logger,
+    migrations: assets.migrations,
+  });
 }
 
 function waitForShutdown(server: ServerType): Promise<void> {
@@ -167,15 +201,6 @@ function waitForShutdown(server: ServerType): Promise<void> {
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
   });
-}
-
-async function resolveStaticRoot(root: string): Promise<string | undefined> {
-  try {
-    await access(join(root, "index.html"));
-    return root;
-  } catch {
-    return undefined;
-  }
 }
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {

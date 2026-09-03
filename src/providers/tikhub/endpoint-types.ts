@@ -1,14 +1,9 @@
 import type { TikHubEndpointMethod } from "./endpoint-policy.ts";
 
-export interface TikHubLlmsIndexEntry {
-  endpointId: string;
+export interface TikHubDiscoveredEndpoint {
   category: string;
   title: string;
   description: string;
-  documentationUrl: string;
-}
-
-export interface TikHubDiscoveredEndpoint extends TikHubLlmsIndexEntry {
   operationId: string;
   method: TikHubEndpointMethod;
   path: string;

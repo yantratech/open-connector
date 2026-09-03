@@ -26,7 +26,7 @@ import {
 } from "../provider-runtime.ts";
 import { defaultSeedanceModel, fastSeedanceModel } from "./actions.ts";
 
-export const volcengineArkApiBaseUrl = "https://ark.cn-beijing.volces.com/api/v3";
+export const seedanceApiBaseUrl = "https://ark.cn-beijing.volces.com/api/v3";
 const seedanceTasksPath = "contents/generations/tasks";
 
 interface SeedanceImageInput {
@@ -72,14 +72,14 @@ interface SeedanceRequestInput {
   path?: string;
   query?: URLSearchParams;
   body?: Record<string, unknown>;
-  phase?: "validate" | "execute";
+  resourcePath?: string;
 }
 
-export const volcengineArkActionHandlers: ProviderActionHandlers<
-  "volcengine_ark",
+export const seedanceActionHandlers: ProviderActionHandlers<
+  "seedance",
   ProviderRuntimeHandler<ApiKeyProviderContext>
 > = {
-  async submit_seedance_video_generation(input, context): Promise<unknown> {
+  async submit_video_generation(input, context): Promise<unknown> {
     const normalized = readSeedanceSubmitInput(input);
     const payload = await requestArkJson({
       context,
@@ -89,7 +89,7 @@ export const volcengineArkActionHandlers: ProviderActionHandlers<
     const record = requiredResponseRecord(payload, "submit response");
     return { taskId: requiredString(record.id, "id", providerResponseError) };
   },
-  async get_seedance_video_generation(input, context): Promise<unknown> {
+  async get_video_generation(input, context): Promise<unknown> {
     const taskId = requiredInputString(input.taskId, "taskId");
     const payload = await requestArkJson({
       context,
@@ -98,7 +98,7 @@ export const volcengineArkActionHandlers: ProviderActionHandlers<
     });
     return normalizeSeedanceTask(payload, taskId);
   },
-  async list_seedance_video_generations(input, context): Promise<unknown> {
+  async list_video_generations(input, context): Promise<unknown> {
     const query = new URLSearchParams();
     setIntegerQuery(query, "page_num", input.pageNumber);
     setIntegerQuery(query, "page_size", input.pageSize);
@@ -118,7 +118,7 @@ export const volcengineArkActionHandlers: ProviderActionHandlers<
       total: requireArkInteger(record.total, "total"),
     };
   },
-  async delete_seedance_video_generation(input, context): Promise<unknown> {
+  async delete_video_generation(input, context): Promise<unknown> {
     const taskId = requiredInputString(input.taskId, "taskId");
     await requestArkJson({
       context,
@@ -129,7 +129,7 @@ export const volcengineArkActionHandlers: ProviderActionHandlers<
   },
 };
 
-export async function validateVolcengineArkCredential(
+export async function validateSeedanceCredential(
   apiKey: string,
   fetcher: typeof fetch,
   signal?: AbortSignal,
@@ -139,15 +139,14 @@ export async function validateVolcengineArkCredential(
     context: { apiKey, fetcher, signal },
     method: "GET",
     query,
-    phase: "validate",
   });
   return {
     profile: {
-      accountId: "volcengine_ark:api_key",
-      displayName: "Volcengine Ark API Key",
+      accountId: "seedance:api_key",
+      displayName: "Seedance API Key",
     },
     grantedScopes: [],
-    metadata: { apiBaseUrl: volcengineArkApiBaseUrl },
+    metadata: { apiBaseUrl: seedanceApiBaseUrl },
   };
 }
 
@@ -254,14 +253,14 @@ export function normalizeSeedanceTask(payload: unknown, fallbackTaskId: string):
   if (status === "failed" || status === "cancelled" || status === "expired") {
     return { ...common, state: status, error: normalizeError(record.error) };
   }
-  throw new ProviderRequestError(502, `Volcengine Ark returned an unknown Seedance task status: ${status}`);
+  throw new ProviderRequestError(502, `Seedance returned an unknown Seedance task status: ${status}`);
 }
 
 async function requestArkJson(input: SeedanceRequestInput): Promise<unknown> {
   input.context.signal?.throwIfAborted();
-  const url = new URL(`${seedanceTasksPath}${input.path ?? ""}`, `${volcengineArkApiBaseUrl}/`);
+  const url = new URL(`${input.resourcePath ?? seedanceTasksPath}${input.path ?? ""}`, `${seedanceApiBaseUrl}/`);
   if (input.query) url.search = input.query.toString();
-  return runProviderRequest({ label: "Volcengine Ark", signal: input.context.signal }, async (signal) => {
+  return runProviderRequest({ label: "Seedance", signal: input.context.signal }, async (signal) => {
     const response = await input.context.fetcher(url, {
       method: input.method,
       headers: {
@@ -275,14 +274,14 @@ async function requestArkJson(input: SeedanceRequestInput): Promise<unknown> {
     });
     const payload = await readProviderJsonBody(response, {
       emptyBody: {},
-      invalidJsonMessage: "Volcengine Ark returned an invalid JSON response",
+      invalidJsonMessage: "Seedance returned an invalid JSON response",
     });
-    if (!response.ok) handleArkError(response, payload, input.phase ?? "execute");
+    if (!response.ok) handleArkError(response, payload);
     return payload;
   });
 }
 
-function handleArkError(response: Response, payload: unknown, phase: "validate" | "execute"): never {
+function handleArkError(response: Response, payload: unknown): never {
   const record = optionalRecord(payload);
   const nestedError = optionalRecord(record?.error);
   const code = optionalString(record?.code) ?? optionalString(nestedError?.code);
@@ -290,11 +289,10 @@ function handleArkError(response: Response, payload: unknown, phase: "validate" 
     optionalString(record?.message) ??
     optionalString(record?.error) ??
     optionalString(nestedError?.message) ??
-    `Volcengine Ark request failed with HTTP ${response.status}`;
+    `Seedance request failed with HTTP ${response.status}`;
   const details = compactObject({ code, status: response.status });
-  if (response.status === 401 || response.status === 403) {
-    throw new ProviderRequestError(phase === "validate" ? 400 : response.status, message, details);
-  }
+  if (response.status === 401 || response.status === 403)
+    throw new ProviderRequestError(response.status, message, details);
   if (response.status === 400 || response.status === 404 || response.status === 422) {
     throw new ProviderRequestError(response.status === 404 ? 404 : 400, message, details, "invalid_input");
   }
@@ -384,7 +382,7 @@ function normalizeError(value: unknown): Record<string, unknown> | undefined {
 
 function requireArkInteger(value: unknown, field: string): number {
   const integer = optionalInteger(value);
-  if (integer === undefined) throw providerResponseError(`Volcengine Ark ${field} must be an integer`);
+  if (integer === undefined) throw providerResponseError(`Seedance ${field} must be an integer`);
   return integer;
 }
 

@@ -135,15 +135,13 @@ const calculatePriceAction = defineTikHubUserAction({
 });
 
 const discoveredEndpointSchema = s.object("One currently discovered TikHub endpoint contract.", {
-  endpointId: s.string("The TikHub documentation identifier for this endpoint."),
   operationId: s.string("The OpenAPI operation identifier reported by TikHub."),
-  title: s.string("The endpoint title from the TikHub documentation index."),
-  category: s.string("The TikHub API family from the documentation index."),
-  description: s.string("The current endpoint description from TikHub documentation."),
+  title: s.string("The endpoint title from the TikHub OpenAPI catalog."),
+  category: s.string("The TikHub API family from the OpenAPI catalog."),
+  description: s.string("The current endpoint description from the TikHub OpenAPI catalog."),
   method: s.stringEnum("The HTTP method accepted by this endpoint.", ["GET", "POST"]),
   path: s.string("The absolute TikHub API path or path template."),
   requiredScope: s.string("The TikHub token path scope required by this endpoint."),
-  documentationUrl: s.url("The fixed-origin TikHub endpoint documentation URL."),
   contractHash: s.string("The SHA-256 digest of the normalized operation contract."),
   requestSchema: s.looseObject("The dynamic path, query, and JSON body request schema."),
 });
@@ -151,7 +149,7 @@ const discoveredEndpointSchema = s.object("One currently discovered TikHub endpo
 const discoverEndpointsAction = defineProviderAction(service, {
   name: "discover_endpoints",
   description:
-    "Discover current TikHub functional API endpoints from the official documentation catalog, excluding account APIs.",
+    "Discover current TikHub functional API endpoints from the official OpenAPI catalog, excluding account APIs.",
   requiredScopes: [],
   providerPermissions: [],
   followUpActions: ["tikhub.invoke_endpoint"],
@@ -169,7 +167,7 @@ const discoverEndpointsAction = defineProviderAction(service, {
           maxLength: 1_024,
         }),
       ),
-      limit: s.integer("The maximum number of endpoint documents to inspect in this page.", {
+      limit: s.integer("The maximum number of OpenAPI operations to inspect in this page.", {
         minimum: 1,
         maximum: 20,
         default: 10,
@@ -178,7 +176,7 @@ const discoverEndpointsAction = defineProviderAction(service, {
     { optional: ["query", "category", "cursor", "limit"] },
   ),
   outputSchema: s.object("The current page of TikHub functional endpoint contracts.", {
-    catalogVersion: s.string("The SHA-256 digest of the current TikHub documentation index."),
+    catalogVersion: s.string("The SHA-256 digest of the current TikHub OpenAPI catalog."),
     endpoints: s.array("The endpoints discovered in this page.", discoveredEndpointSchema),
     nextCursor: s.nullable(s.string("The next opaque catalog cursor when more entries remain.")),
     stale: s.boolean("Whether discovery used a recent stale catalog after a refresh failure."),
