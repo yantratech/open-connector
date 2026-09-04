@@ -6,24 +6,33 @@ name: Publish Docker Image
 # Triggers and tags:
 #   - push to main (this includes merged PRs): `tip` + the short commit hash
 #   - published release:                       `latest` + the release version (e.g. v1.0.0)
+#   - manual release backfill:                 the requested release version, optionally `latest`
 #
-# The image is multi-arch (linux/amd64 + linux/arm64). A GitHub-hosted runner
-# uses QEMU and Buildx to publish one manifest, so forks do not depend on an
-# external runner service being installed for the repository.
-#
-# main-branch pushes and releases never overlap: `push` ignores tag refs and
-# publishing a release does not fire a branch `push`. See docs/docker-ghcr.md.
+# Fulcrum runs OpenConnector on ARM64 ECS tasks, so the fork publishes one
+# linux/arm64 image built natively on a GitHub-hosted ARM runner. Keeping the
+# release single-platform avoids QEMU and gives Fulcrum an unambiguous image
+# manifest digest to pin.
 on:
   push:
     branches: [main]
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Build this existing release tag"
+        required: true
+        type: string
+      publish_latest:
+        description: "Also update the latest tag"
+        required: true
+        default: false
+        type: boolean
 
-# One in-flight publish per ref. main pushes share a group so a newer commit
-# cancels an older, still-running build — this keeps `tip` pointing at the most
-# recent commit. Releases use their own per-tag group and are never cancelled.
+# Main pushes share a group so a newer commit cancels an older build. Release
+# and manual backfill runs use the release tag as their independent group.
 concurrency:
-  group: publish-docker-${{ github.ref }}
+  group: publish-docker-${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 # Least privilege: read the repo, and write packages to push the image to GHCR.
@@ -35,18 +44,41 @@ env:
   REGISTRY: ghcr.io
   # Resolves to ghcr.io/<owner>/open-connector and auto-links the package.
   IMAGE_NAME: ${{ github.repository }}
+  # Empty on a main push. Release and backfill runs build this exact tag.
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
 
 jobs:
   publish:
-    name: Build & Push multi-arch image
-    runs-on: ubuntu-latest
+    name: Build & Push ARM64 Image
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A manual backfill started from main must still build the release
+          # tag, never the workflow ref.
+          ref: ${{ env.RELEASE_TAG || github.sha }}
           persist-credentials: false
 
-      - name: Compute tags
+      - name: Resolve image source
+        id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          version=${source_sha:0:7}
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+            version=${RELEASE_TAG}
+          fi
+          {
+            echo "sha=${source_sha}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute tags and labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
@@ -55,11 +87,11 @@ jobs:
           tags: |
             type=raw,value=tip,enable=${{ github.event_name == 'push' }}
             type=sha,prefix=,format=short,enable=${{ github.event_name == 'push' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && github.event.release.prerelease == false }}
-            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+            type=raw,value=latest,enable=${{ (github.event_name == 'release' && github.event.release.prerelease == false) || inputs.publish_latest == true }}
+            type=raw,value=${{ env.RELEASE_TAG }},enable=${{ env.RELEASE_TAG != '' }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -71,19 +103,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push ARM64 image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=publish-docker-linux-arm64
+          cache-to: type=gha,mode=max,scope=publish-docker-linux-arm64
 
-      - name: Inspect manifest
+      - name: Inspect published image
         run: docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
