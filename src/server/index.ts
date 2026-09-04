@@ -1,10 +1,10 @@
 import type { IStagedTransitFileService } from "./files/transit-file-store.ts";
 import type { ServerType } from "@hono/node-server";
 
-import { S3Client } from "@aws-sdk/client-s3";
 import { serve } from "@hono/node-server";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { defaultLazySchemaCacheFiles } from "../catalog-lazy-schemas.ts";
 import { loadCatalog } from "../catalog-store.ts";
 import { ActionPolicyService, parseActionPolicyList } from "../core/action-policy.ts";
 import {
@@ -19,7 +19,6 @@ import { createRuntimeJwtVerifier } from "./api/runtime-jwt.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { createConnectApp } from "./connect-app.ts";
 import { cleanupStagedTransitFiles, createNodeTransitFileUpload } from "./files/node-transit-file-upload.ts";
-import { S3TransitFileService } from "./files/s3-transit-files.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { logger } from "./logger.ts";
 import { createSecretCodec } from "./secrets/secret-codec.ts";
@@ -49,6 +48,8 @@ const [command, ...rest] = process.argv.slice(2);
 
 try {
   if (command === undefined) {
+    // Resolves once `serve()` has requested the listener, before it is up; a bind failure and the server's lifetime
+    // are deliberately not awaited here, see `main`.
     await main();
   } else if (command === "migrate" && rest.length === 0) {
     await runMigrateCommand();
@@ -57,10 +58,19 @@ try {
     process.exitCode = 1;
   }
 } catch (error) {
-  logger.error({ err: error }, command === "migrate" ? "migrate failed" : "connect server failed");
-  process.exitCode = 1;
+  reportFailure(error);
 }
 
+/**
+ * Start the server and resolve as soon as `serve()` returns, which only requests the listener: the bind completes
+ * later, and a bind failure such as EADDRINUSE surfaces as the server's unhandled 'error' event, which ends the
+ * process with exit code 1 without closing the runtime database, under Bun as under Node. Waiting for SIGINT/SIGTERM
+ * and closing the runtime database afterwards belong to a promise chain that is deliberately not awaited, so this
+ * entry module finishes evaluating while the server runs. A Bun single-file executable releases the executable's
+ * module-graph pages (the bundle plus every embedded catalog file read during startup) with one
+ * madvise(MADV_DONTNEED) once the entry module has evaluated; a top-level await spanning the server's lifetime keeps
+ * about 85 MB of them resident on Linux, and under Bun also turns a listen error into a hang instead of an exit.
+ */
 async function main(): Promise<void> {
   setPrivateNetworkAccessAllowed(parsePrivateNetworkAccessFlag(process.env.OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK));
   setEgressTrustedHosts(parseEgressTrustedHosts(process.env.OOMOL_CONNECT_EGRESS_TRUSTED_HOSTS));
@@ -68,7 +78,7 @@ async function main(): Promise<void> {
   const secretCodec = createSecretCodec(process.env.OOMOL_CONNECT_ENCRYPTION_KEY);
   const adminToken = process.env.OOMOL_CONNECT_ADMIN_TOKEN;
   const runtimeToken = process.env.OOMOL_CONNECT_RUNTIME_TOKEN;
-  const verifyRuntimeJwt = createRuntimeJwtVerifier({
+  const verifyRuntimeJwt = await createRuntimeJwtVerifier({
     jwksUri: process.env.OOMOL_CONNECT_JWKS_URI,
     issuer: process.env.OOMOL_CONNECT_JWT_ISSUER,
     audience: process.env.OOMOL_CONNECT_JWT_AUDIENCE,
@@ -83,9 +93,30 @@ async function main(): Promise<void> {
 
   await mkdir(dataDir, { recursive: true });
   const assets = await resolveServerAssets();
+  const lazySchemas = parseBooleanEnv("OOMOL_CONNECT_CATALOG_LAZY_SCHEMAS");
+  if (lazySchemas && !assets.catalogIndexFile) {
+    logger.warn(
+      { catalogDir: assets.catalogDir },
+      "catalog index is missing; reading every provider file at startup. Run npm run generate:catalog to write catalog/apps-index.json",
+    );
+  }
   const catalog = await loadCatalog(assets.catalogDir, {
     executableServices: Object.keys(executorModules),
+    lazySchemas,
+    lazySchemaCacheFiles: readPositiveIntegerEnv(
+      "OOMOL_CONNECT_CATALOG_SCHEMA_CACHE_FILES",
+      defaultLazySchemaCacheFiles,
+    ),
+    lazySchemaIndexFile: assets.catalogIndexFile,
   });
+  logger.info(
+    {
+      providers: catalog.providers.length,
+      actions: catalog.actions.length,
+      catalogIndex: lazySchemas && assets.catalogIndexFile !== undefined,
+    },
+    "catalog loaded",
+  );
   const runtimeDatabase = databaseUrl
     ? await createNodeRuntimeDatabase({
         backend: "postgresql",
@@ -107,7 +138,7 @@ async function main(): Promise<void> {
       });
 
   try {
-    const transitFiles = createTransitFileService();
+    const transitFiles = await createTransitFileService();
     const transitFileTempDir = join(dataDir, "tmp", "transit-files");
     await transitFiles.cleanupExpired();
     await cleanupStagedTransitFiles(transitFileTempDir, transitFileTtlSeconds * 1000);
@@ -158,10 +189,21 @@ async function main(): Promise<void> {
       },
     );
 
-    await waitForShutdown(server);
-  } finally {
+    // A startup failure above closes the database in the catch. From here this chain owns it; a bind failure never
+    // reaches it and ends the process through the server's unhandled 'error' event instead.
+    waitForShutdown(server)
+      .finally(() => runtimeDatabase.close())
+      .catch(reportFailure);
+  } catch (error) {
     await runtimeDatabase.close();
+    throw error;
   }
+}
+
+/** Log a startup, migrate, or shutdown failure; the process exits with code 1 once its handles are closed. */
+function reportFailure(error: unknown): void {
+  logger.error({ err: error }, command === "migrate" ? "migrate failed" : "connect server failed");
+  process.exitCode = 1;
 }
 
 async function runMigrateCommand(): Promise<void> {
@@ -213,7 +255,7 @@ function readPositiveIntegerEnv(name: string, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function createTransitFileService(): IStagedTransitFileService {
+async function createTransitFileService(): Promise<IStagedTransitFileService> {
   const backend = process.env.OOMOL_CONNECT_TRANSIT_FILE_BACKEND ?? "local";
   switch (backend) {
     case "local":
@@ -232,23 +274,22 @@ function createTransitFileService(): IStagedTransitFileService {
         );
       }
 
-      const client = new S3Client({
-        region: optionalEnv("OOMOL_CONNECT_S3_REGION") ?? "us-east-1",
-        endpoint: optionalEnv("OOMOL_CONNECT_S3_ENDPOINT"),
-        forcePathStyle: parseBooleanEnv("OOMOL_CONNECT_S3_FORCE_PATH_STYLE"),
-        requestChecksumCalculation: "WHEN_REQUIRED",
-        responseChecksumValidation: "WHEN_REQUIRED",
-        credentials:
-          accessKeyId && secretAccessKey
-            ? {
-                accessKeyId,
-                secretAccessKey,
-                sessionToken: optionalEnv("OOMOL_CONNECT_S3_SESSION_TOKEN"),
-              }
-            : undefined,
-      });
+      // @aws-sdk/client-s3 is loaded only for this backend; the default local backend never pays for it.
+      const { createS3TransitClient, S3TransitFileService } = await import("./files/s3-transit-files.ts");
       return new S3TransitFileService({
-        client,
+        client: createS3TransitClient({
+          region: optionalEnv("OOMOL_CONNECT_S3_REGION") ?? "us-east-1",
+          endpoint: optionalEnv("OOMOL_CONNECT_S3_ENDPOINT"),
+          forcePathStyle: parseBooleanEnv("OOMOL_CONNECT_S3_FORCE_PATH_STYLE"),
+          credentials:
+            accessKeyId && secretAccessKey
+              ? {
+                  accessKeyId,
+                  secretAccessKey,
+                  sessionToken: optionalEnv("OOMOL_CONNECT_S3_SESSION_TOKEN"),
+                }
+              : undefined,
+        }),
         bucket: requiredEnv("OOMOL_CONNECT_S3_BUCKET"),
         publicOrigin,
         ttlSeconds: transitFileTtlSeconds,

@@ -246,6 +246,16 @@ export function optionalNumber(value: unknown): number | undefined {
 }
 
 /**
+ * Return a finite number from a number or numeric string when present. Examples:
+ * `optionalNumberLike("1.5") => 1.5`, `optionalNumberLike("x") => undefined`.
+ */
+export function optionalNumberLike(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" && value !== "" ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
  * Return an integer from a number or numeric string. Examples:
  * `integer("2", "count") => 2`, `integer("x", "count")` throws.
  */

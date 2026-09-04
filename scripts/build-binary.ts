@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { catalogIndexFileName } from "../src/catalog-index.ts";
 
 // Build the single-file server executables with Bun.
 //
@@ -40,11 +41,17 @@ function assertPinnedBunVersion(): void {
   }
 }
 
-/** The embedded directories are generated; refuse to build a binary that would ship an empty catalog or console. */
+/**
+ * The embedded directories are generated; refuse to build a binary that would ship an empty catalog or console, or
+ * the Cloudflare Workers catalog chunks on top of the catalog it already embeds.
+ */
 function assertBuildInputs(): void {
   const problems: string[] = [];
   if (listFiles(join(rootDir, "catalog/apps"), ".json").length === 0) {
     problems.push("catalog/apps contains no .json files");
+  }
+  if (!existsSync(join(rootDir, "catalog", catalogIndexFileName))) {
+    problems.push(`catalog/${catalogIndexFileName} is missing`);
   }
   if (listFiles(join(rootDir, "migrations"), ".sql").length === 0) {
     problems.push("migrations contains no .sql files");
@@ -58,6 +65,13 @@ function assertBuildInputs(): void {
   if (problems.length > 0) {
     fail(
       `Build inputs are missing:\n  - ${problems.join("\n  - ")}\nRun "npm run build:binary" so the catalog and the web console are generated before the binary is built.`,
+    );
+  }
+  // scripts/copy-catalog-assets.ts writes the Workers catalog chunks under dist/web, and compile.assets embeds
+  // dist/web wholesale, so a leftover copy would ship the whole catalog a second time inside the executable.
+  if (existsSync(join(rootDir, "dist/web/catalog"))) {
+    fail(
+      'dist/web/catalog exists (Cloudflare Workers catalog chunks written by scripts/copy-catalog-assets.ts) and would be embedded into the binary. Remove that directory or rebuild the console with "npm run build:web".',
     );
   }
 }
@@ -92,10 +106,14 @@ async function buildTarget(binaryTarget: BinaryTarget): Promise<void> {
   rmSync(`${outfile}.exe`, { force: true });
 
   const result = await runBunBuild(binaryTarget.target, outfile);
-  const [artifact] = result.outputs;
-  if (!artifact) {
-    fail(`Bun.build produced no output for ${binaryTarget.name}.`);
+  // Code splitting keeps every chunk inside the executable, so exactly one output is expected. A future Bun that
+  // reports chunks as outputs must not have signDarwinBinary sign, or the size log measure, a chunk.
+  if (result.outputs.length !== 1) {
+    fail(
+      `Bun.build produced ${result.outputs.length} outputs for ${binaryTarget.name}; expected the single executable.`,
+    );
   }
+  const [artifact] = result.outputs;
 
   if (binaryTarget.target.startsWith("bun-darwin-")) {
     signDarwinBinary(artifact.path);
@@ -112,6 +130,12 @@ async function runBunBuild(target: Bun.Build.CompileTarget, outfile: string): Pr
       entrypoints: [join(rootDir, "src/server/index.ts")],
       target: "bun",
       format: "esm",
+      // Every provider executor is reached only through the `import()` in src/providers/registry.generated.ts. With
+      // splitting those imports become chunks embedded next to the entry module (/$bunfs/root/chunk-<hash>.js, or
+      // B:/~BUN/root/chunk-<hash>.js on Windows; Bun rewrites the paths per target) that JavaScriptCore reads, parses
+      // and keeps resident only when a provider is first used, instead of one ~30 MB entry module parsed at startup.
+      // compile.outfile still produces exactly one file; no chunk files are written to dist/.
+      splitting: true,
       // ali-oss depends on urllib, which lazily `require("proxy-agent")`, an optional peer dependency that is not
       // installed here. The bundler cannot resolve it, so it stays a runtime require that is never reached.
       external: ["proxy-agent"],
@@ -122,10 +146,16 @@ async function runBunBuild(target: Bun.Build.CompileTarget, outfile: string): Pr
       compile: {
         target,
         outfile,
-        // Each directory is embedded under its basename next to the bundle: migrations/, apps/ and web/.
-        // catalog/apps rather than catalog/: an interrupted `npm run generate:catalog` leaves catalog/.apps-<pid>-<ts>
-        // temp directories behind, and they must never end up inside a release.
-        assets: [join(rootDir, "migrations"), join(rootDir, "catalog/apps"), join(rootDir, "dist/web")],
+        // Each directory is embedded under its basename next to the bundle (migrations/, apps/ and web/), and the
+        // catalog index file under its basename beside them (apps-index.json). catalog/apps rather than catalog/: an
+        // interrupted `npm run generate:catalog` leaves catalog/.apps-<pid>-<ts> temp files behind, and they must
+        // never end up inside a release.
+        assets: [
+          join(rootDir, "migrations"),
+          join(rootDir, "catalog/apps"),
+          join(rootDir, "catalog", catalogIndexFileName),
+          join(rootDir, "dist/web"),
+        ],
         // `node src/server/index.ts` reads neither .env nor bunfig.toml; keep the binary's configuration surface the same.
         autoloadDotenv: false,
         autoloadBunfig: false,
