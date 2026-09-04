@@ -9,11 +9,14 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Start a built single-file executable against a fresh data directory and check that its embedded catalog,
-// web console, migrations and shutdown path work.
+// web console, migrations, provider executor chunks, lazily loaded MCP and docs modules, exit on a port conflict
+// and shutdown path work.
 //
 // Usage: `node scripts/smoke-binary.ts <path-to-binary>`. Set OOMOL_CONNECT_DATABASE_URL to run the PostgreSQL
-// mode; every other OOMOL_CONNECT_* variable is removed from the server's environment. Uses only Node built-ins so
-// the smoke runners need no `npm ci`.
+// mode and OOMOL_CONNECT_CATALOG_LAZY_SCHEMAS to a value the server reads as true (1, true, yes or on) to run the
+// lazy catalog mode, which also proves that the embedded catalog index was found and used at startup; every other
+// OOMOL_CONNECT_* variable is removed from the server's environment. Uses only Node built-ins so the smoke runners
+// need no `npm ci`.
 
 interface ProcessExit {
   code: number | null;
@@ -109,6 +112,7 @@ class ServerProcess {
 const binaryPath = await resolveBinaryPath(process.argv[2]);
 const databaseUrl = process.env.OOMOL_CONNECT_DATABASE_URL?.trim() || undefined;
 const mode = databaseUrl ? "postgresql" : "sqlite";
+const lazyCatalogSchemas = isTruthyEnv(process.env.OOMOL_CONNECT_CATALOG_LAZY_SCHEMAS);
 const startedAt = performance.now();
 // Probe the port before creating the data directory so a probe failure cannot leak the temp directory.
 const port = await findFreePort();
@@ -122,8 +126,16 @@ try {
   const indexHtml = await checkConsoleIndex(baseUrl);
   await checkConsoleAssets(baseUrl, indexHtml);
   await checkProviders(baseUrl);
+  await checkActionSchema(baseUrl);
+  if (lazyCatalogSchemas) {
+    checkCatalogIndexUsed(server);
+  }
   await checkApps(baseUrl);
+  await checkProviderExecutor(baseUrl);
+  await checkMcp(baseUrl);
+  await checkDocs(baseUrl);
   await checkDatabaseBackend(server, dataDir, databaseUrl);
+  await checkPortConflictExit(binaryPath, port, databaseUrl);
   await checkGracefulShutdown(server);
   await removeDataDir(dataDir);
   console.log(
@@ -171,8 +183,24 @@ function buildServerEnvironment(options: ServerProcessOptions): NodeJS.ProcessEn
   if (options.databaseUrl) {
     env.OOMOL_CONNECT_DATABASE_URL = options.databaseUrl;
   }
+  // Forwarded verbatim on purpose: it is what makes a smoke run read action schemas from the embedded catalog on
+  // demand, and the server applies its own reading of the value.
+  const lazyCatalogSchemasValue = process.env.OOMOL_CONNECT_CATALOG_LAZY_SCHEMAS;
+  if (lazyCatalogSchemasValue !== undefined) {
+    env.OOMOL_CONNECT_CATALOG_LAZY_SCHEMAS = lazyCatalogSchemasValue;
+  }
 
   return env;
+}
+
+/**
+ * Whether the server reads an OOMOL_CONNECT_* value as true. Mirrors parseBooleanEnv in src/server/index.ts token
+ * for token (1, true, yes, on; trimmed, case-insensitive). It is a copy rather than an import because this script
+ * must stay free of src imports so the smoke runners can run it with nothing but Node.
+ */
+function isTruthyEnv(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
 function findFreePort(): Promise<number> {
@@ -275,19 +303,122 @@ async function checkProviders(baseUrl: string): Promise<void> {
   );
 }
 
+/**
+ * With OOMOL_CONNECT_CATALOG_LAZY_SCHEMAS the schemas are read from the embedded catalog file when the action is
+ * requested, so one action detail proves that on-demand read; slack is already known to be in /v1/providers.
+ */
+async function checkActionSchema(baseUrl: string): Promise<void> {
+  const actionId = "slack.add_reaction";
+  const data = await fetchEnvelopeData(baseUrl, `/v1/actions/${actionId}`);
+  assert(isRecord(data), `/v1/actions/${actionId} data is not an object`);
+  assert(isRecord(data.inputSchema), `/v1/actions/${actionId} inputSchema is not an object`);
+  assert(Object.keys(data.inputSchema).length > 0, `/v1/actions/${actionId} inputSchema is empty`);
+}
+
+/**
+ * In lazy catalog mode the server reads the embedded catalog index (scripts/build-binary.ts embeds
+ * catalog/apps-index.json under its basename) instead of every provider file and reports that in its "catalog
+ * loaded" line. The line is what proves the embed name and the resolver name in src/server/server-assets.ts still
+ * agree inside a real binary; a missing index only warns and falls back, so /health alone would not catch it.
+ */
+function checkCatalogIndexUsed(server: ServerProcess): void {
+  assert(
+    server.stdout.includes('"catalogIndex":true'),
+    'server log has no "catalogIndex":true line; lazy catalog mode did not use the embedded catalog index',
+  );
+}
+
 async function checkApps(baseUrl: string): Promise<void> {
   const data = await fetchEnvelopeData(baseUrl, "/v1/apps");
   assert(Array.isArray(data), "/v1/apps data is not an array");
 }
 
-/** Return `data` of a `{ success: true, data }` envelope. */
-async function fetchEnvelopeData(baseUrl: string, path: string): Promise<unknown> {
-  const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(requestTimeoutMs) });
+/**
+ * Provider executors are separate chunks inside the executable (scripts/build-binary.ts builds with code splitting),
+ * so the catalog checks above prove nothing about them. quickchart.build_chart_url is a no_auth action whose executor
+ * assembles the URL locally, so one call imports and runs a provider chunk with no credential, no network egress and a
+ * fixed answer. A chunk that fails to import surfaces as a 500 internal_error envelope (ActionRunner), never as 200.
+ * The URL is checked structurally rather than as a literal so the provider's own serialization details stay its own.
+ */
+async function checkProviderExecutor(baseUrl: string): Promise<void> {
+  const actionId = "quickchart.build_chart_url";
+  const chart = { type: "bar" };
+  const data = await fetchEnvelopeData(baseUrl, `/v1/actions/${actionId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ input: { chart } }),
+  });
+  assert(isRecord(data), `POST /v1/actions/${actionId} data is not an object`);
+  assert(typeof data.url === "string", `POST /v1/actions/${actionId} url is ${JSON.stringify(data.url)}`);
+  const url = new URL(data.url);
+  assert.equal(`${url.origin}${url.pathname}`, "https://quickchart.io/chart", `POST /v1/actions/${actionId} url`);
+  const chartParameter = url.searchParams.get("chart");
+  assert(chartParameter !== null, `POST /v1/actions/${actionId} url has no chart parameter: ${data.url}`);
+  assert.deepEqual(JSON.parse(chartParameter), chart, `POST /v1/actions/${actionId} chart parameter`);
+}
+
+/**
+ * The MCP module (@modelcontextprotocol/server and zod) is imported on the first /mcp request rather than at
+ * startup, so /health proves nothing about it. One stateless initialize round trip imports and evaluates that chunk
+ * inside the binary; the body is matched as text because the transport may frame the JSON-RPC result as SSE.
+ * GET /mcp/tools then reads the tool summaries from the same module.
+ */
+async function checkMcp(baseUrl: string): Promise<void> {
+  const response = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0" } },
+    }),
+    signal: AbortSignal.timeout(requestTimeoutMs),
+  });
   const body = await response.text();
-  assert(response.status === 200, `GET ${path} returned ${response.status}`);
+  assert(response.status === 200, `POST /mcp initialize returned ${response.status}: ${body.slice(0, 300)}`);
+  assert(
+    body.includes('"name":"oomol-connect"'),
+    `POST /mcp initialize body has no server info: ${body.slice(0, 300)}`,
+  );
+
+  const toolsResponse = await fetch(`${baseUrl}/mcp/tools`, { signal: AbortSignal.timeout(requestTimeoutMs) });
+  const toolsBody = await toolsResponse.text();
+  assert(toolsResponse.status === 200, `GET /mcp/tools returned ${toolsResponse.status}: ${toolsBody.slice(0, 300)}`);
+  const payload: unknown = JSON.parse(toolsBody);
+  assert(isRecord(payload) && Array.isArray(payload.tools), "GET /mcp/tools did not return a tools array");
+  const tools: unknown[] = payload.tools;
+  assert(tools.length > 0, "GET /mcp/tools returned an empty tools array");
+  const names = tools.map((tool) => (isRecord(tool) && typeof tool.name === "string" ? tool.name : undefined));
+  const unnamed = names.indexOf(undefined);
+  assert(unnamed === -1, `GET /mcp/tools entry ${unnamed} has no string name: ${toolsBody.slice(0, 300)}`);
+  // src/mcp.ts registers more tools than these; only the two that cannot go away are pinned, so adding an MCP tool
+  // later does not break the release smoke.
+  for (const expected of ["search_actions", "execute_action"]) {
+    assert(names.includes(expected), `GET /mcp/tools does not list ${expected}: ${names.join(", ")}`);
+  }
+}
+
+/** The Scalar API reference package is imported on the first /docs request; one page render proves that chunk. */
+async function checkDocs(baseUrl: string): Promise<void> {
+  const response = await fetch(`${baseUrl}/docs`, { signal: AbortSignal.timeout(requestTimeoutMs) });
+  const body = await response.text();
+  assert(response.status === 200, `GET /docs returned ${response.status}: ${body.slice(0, 300)}`);
+  const contentType = response.headers.get("content-type") ?? "";
+  assert(contentType.startsWith("text/html"), `GET /docs content-type is ${contentType || "missing"}`);
+  assert(body.includes("OOMOL Connect API Reference"), "GET /docs body does not contain the API reference title");
+}
+
+/** Return `data` of a `{ success: true, data }` envelope. */
+async function fetchEnvelopeData(baseUrl: string, path: string, init: RequestInit = {}): Promise<unknown> {
+  const method = init.method ?? "GET";
+  const response = await fetch(`${baseUrl}${path}`, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) });
+  const body = await response.text();
+  // The body excerpt is what makes a failed provider chunk import (a 500 internal_error envelope) diagnosable.
+  assert(response.status === 200, `${method} ${path} returned ${response.status}: ${body.slice(0, 300)}`);
   const payload: unknown = JSON.parse(body);
-  assert(isRecord(payload), `GET ${path} did not return a JSON object`);
-  assert(payload.success === true, `GET ${path} envelope success is ${JSON.stringify(payload.success)}`);
+  assert(isRecord(payload), `${method} ${path} did not return a JSON object`);
+  assert(payload.success === true, `${method} ${path} envelope success is ${JSON.stringify(payload.success)}`);
   return payload.data;
 }
 
@@ -309,6 +440,45 @@ async function checkDatabaseBackend(
     await access(join(dataDir, "connect.sqlite"));
   } catch {
     throw new Error(`connect.sqlite was not created in ${dataDir}`);
+  }
+}
+
+/**
+ * A second instance on a port that is already in use must exit instead of hanging. src/server/index.ts finishes
+ * evaluating once the server listens; with a top-level await spanning the server's lifetime, Bun printed the listen
+ * failure and then waited forever on that promise, so the binary hung on EADDRINUSE while Node exited with code 1.
+ * The first server is still listening here, and the second one only reaches the conflict after a full startup of its
+ * own, which is why the wait is sized like a startup rather than a shutdown.
+ */
+async function checkPortConflictExit(binaryPath: string, port: number, databaseUrl: string | undefined): Promise<void> {
+  const conflictDataDir = await mkdtemp(join(tmpdir(), "open-connector-smoke-conflict-"));
+  const second = new ServerProcess({ binaryPath, dataDir: conflictDataDir, port, databaseUrl });
+  try {
+    const exit = await second.waitForExit(healthTimeoutMs);
+    if (!exit) {
+      throw new Error(
+        `second instance did not exit within ${healthTimeoutMs} ms on a port conflict\n--- second instance stderr ---\n${second.stderr}`,
+      );
+    }
+
+    // A spawn failure also reports code null, so requiring exactly 1 still excludes it. The documented contract is
+    // exit code 1: Bun's and Node's unhandled 'error' event both end the process with 1, verified on macOS, Linux and
+    // Windows, so any other code means the listen failure was not what ended the process.
+    assert(
+      exit.signal === null && exit.code === 1,
+      `second instance on a busy port ended with ${second.describeExit()}; expected exit code 1`,
+    );
+    // Bun prints "Failed to start server. Is port N in use?" on every platform, Windows included, and Node "listen
+    // EADDRINUSE"; without this, a crash for an unrelated reason would pass as the port conflict exit.
+    const stderr = second.stderr.trim();
+    assert(
+      /EADDRINUSE|in use/i.test(stderr),
+      `second instance on a busy port exited with code ${exit.code} but its stderr does not mention the port conflict\n--- second instance stderr ---\n${stderr.slice(0, 1000) || "(empty)"}`,
+    );
+    console.log(`port conflict: second instance exited with code ${exit.code}`);
+  } finally {
+    await second.forceStop();
+    await removeDataDir(conflictDataDir);
   }
 }
 

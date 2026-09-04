@@ -4,6 +4,7 @@ import {
   booleanString,
   looseArray,
   optionalIntegerOrNull,
+  optionalNumberLike,
   optionalStringArray,
   positiveInteger,
   rawStringOrNull,
@@ -14,6 +15,12 @@ import {
 } from "./cast.ts";
 
 describe("cast helpers", () => {
+  it("reads finite numbers from numbers and numeric strings", () => {
+    expect(optionalNumberLike(1.5)).toBe(1.5);
+    expect(optionalNumberLike("2.5")).toBe(2.5);
+    expect(optionalNumberLike("")).toBeUndefined();
+    expect(optionalNumberLike("not-a-number")).toBeUndefined();
+  });
   it("decodes strict base64 bytes", () => {
     expect(Array.from(base64Bytes("aGVsbG8=", "payload"))).toEqual([104, 101, 108, 108, 111]);
   });

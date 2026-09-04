@@ -1,7 +1,6 @@
 import type { OAuth2AuthDefinition } from "../core/types.ts";
 import type { OAuthClientConfig } from "./oauth-client-config-service.ts";
 
-import { importPKCS8, SignJWT } from "jose";
 import { optionalRecord, optionalString, requiredString } from "../core/cast.ts";
 import { readBoundedResponseBytes } from "../core/request.ts";
 import {
@@ -201,6 +200,7 @@ async function createPrivateKeyJwt(
   createError: OAuthTokenErrorFactory,
 ): Promise<string> {
   try {
+    const { importPKCS8, SignJWT } = await import("jose");
     const key = await importPKCS8(input.privateKey, "RS256");
     return await new SignJWT({})
       .setProtectedHeader({ alg: "RS256" })
