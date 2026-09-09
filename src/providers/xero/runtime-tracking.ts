@@ -50,7 +50,14 @@ export async function writeXeroTrackingOptions(
         error: error.message,
         outcomeUnknown: error.status >= 500,
       });
-      if (error.status >= 500 || error.status === 429 || error.status === 401 || error.status === 403) break;
+      if (error.status === 401 || error.status === 403 || error.status === 429)
+        throw new ProviderRequestError(error.status, error.message, {
+          upstream: error.details,
+          results,
+          attempted: results.length,
+          not_attempted: options.length - results.length,
+        });
+      if (error.status >= 500) break;
     }
   }
   return {

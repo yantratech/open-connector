@@ -142,9 +142,10 @@ export async function readKandjiPage(
     const accepted = rows.slice(0, limit);
     items.push(...accepted);
     offset += accepted.length;
+    // Several Kandji endpoints clamp the requested limit; only an empty page proves EOF without metadata.
     hasMore =
       rows.length > limit ||
-      (record && "next" in record ? record.next !== null : count !== null ? offset < count : rows.length === limit);
+      (record && "next" in record ? record.next !== null : count !== null ? offset < count : rows.length > 0);
     if (accepted.length === 0 && hasMore)
       throw new ProviderRequestError(
         502,

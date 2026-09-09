@@ -412,3 +412,28 @@ it("serializes folder names as the official Files SDK does", async () => {
   expect(requests[0].url.pathname).toBe("/files.xro/1.0/Folders");
   expect(requests[0].body).toEqual({ Name: "Evidence" });
 });
+
+it.each([401, 403, 429])("propagates tracking batch status %s with prior write outcomes", async (status) => {
+  const { context, requests } = connection((request) =>
+    (request.body as { Name: string }).Name === "Two"
+      ? Response.json({ Message: "Provider rejected request" }, { status })
+      : { Options: [{ TrackingOptionID: id }] },
+  );
+  await expect(
+    xeroActionHandlers.create_tracking_options(
+      { tenant_id: tenant, tracking_category_id: id, names: ["One", "Two", "Three"] },
+      context,
+    ),
+  ).rejects.toMatchObject({
+    status,
+    details: {
+      attempted: 2,
+      not_attempted: 1,
+      results: [
+        { index: 0, success: true },
+        { index: 1, success: false, status },
+      ],
+    },
+  });
+  expect(requests).toHaveLength(2);
+});

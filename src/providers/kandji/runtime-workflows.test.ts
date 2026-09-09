@@ -132,3 +132,18 @@ describe("Kandji management workflows", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+it("continues Prism pages when Kandji silently clamps the requested limit", async () => {
+  const rows = Array.from({ length: 200 }, (_, n) => ({ device_id: `device-${n}`, bundle_name: `app-${n}` }));
+  const fetcher = vi.fn<typeof fetch>(async (input) => {
+    const offset = Number(new URL(String(input)).searchParams.get("offset"));
+    return Response.json({ data: rows.slice(offset, offset + 100) });
+  });
+  const result = await kandjiActionHandlers.prism_apps({ maxResults: 250 }, context(fetcher));
+  expect(result).toMatchObject({ returned: 200, truncated: false, nextOffset: null });
+  expect(fetcher.mock.calls.map(([url]) => new URL(String(url)).searchParams.get("offset"))).toEqual([
+    "0",
+    "100",
+    "200",
+  ]);
+});
