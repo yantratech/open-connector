@@ -365,7 +365,6 @@
       "src/providers/jiminny/runtime.ts": 2,
       "src/providers/jira/executors.ts": 2,
       "src/providers/kaleido/runtime.ts": 1,
-      "src/providers/kandji/runtime.ts": 1,
       "src/providers/keygen/executors.ts": 3,
       "src/providers/keyword/runtime.ts": 1,
       "src/providers/kie_ai/executors.ts": 1,

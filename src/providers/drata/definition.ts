@@ -18,6 +18,15 @@ export const provider: ProviderDefinition = {
         "Drata API key used with the Authorization Bearer header. Create or view API keys in Drata as documented at https://help.drata.com/en/articles/6695964.",
       extraFields: [
         {
+          key: "githubToken",
+          label: "GitHub token",
+          inputType: "text",
+          required: false,
+          secret: true,
+          description:
+            "Optional GitHub token for repository security scans. Requires repository metadata, administration, collaborators and Dependabot read access. Sent only to api.github.com.",
+        },
+        {
           key: "region",
           label: "Region",
           inputType: "text",

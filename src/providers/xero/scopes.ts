@@ -20,38 +20,5 @@ export const xeroProfitAndLossReadScope = "accounting.reports.profitandloss.read
 export const xeroBalanceSheetReadScope = "accounting.reports.balancesheet.read";
 export const xeroContactsWriteScope = "accounting.contacts";
 export const xeroInvoicesWriteScope = "accounting.invoices";
-/** OpenID Connect scopes required to call GET https://identity.xero.com/connect/userinfo. */
-export const xeroOpenIdScope = "openid";
-export const xeroProfileScope = "profile";
-export const xeroEmailScope = "email";
-/** Required for a refresh token. Without it, Xero access lasts 30 minutes and then dies. */
-export const xeroOfflineAccessScope = "offline_access";
-
-/**
- * Read-only scopes: safe for an agent that should inspect the books without
- * modifying them. `app.connections` is intentionally not requested (see above)
- * even though the tenant resolution calls the Identity API connections endpoint.
- */
-export const xeroReadOnlyScopes: string[] = [
-  xeroSettingsReadScope,
-  xeroContactsReadScope,
-  xeroInvoicesReadScope,
-  xeroBankTransactionsReadScope,
-  xeroPaymentsReadScope,
-  xeroJournalsReadScope,
-  xeroProfitAndLossReadScope,
-  xeroBalanceSheetReadScope,
-];
-
-/** Read-write scopes needed by create/update actions such as creating invoices. */
-export const xeroWriteScopes: string[] = [xeroContactsWriteScope, xeroInvoicesWriteScope];
-
-/** Scopes declared on the OAuth app. OIDC scopes are required for userinfo; `offline_access` is required so the runtime can refresh. */
-export const xeroOAuthScopes: string[] = [
-  xeroOpenIdScope,
-  xeroProfileScope,
-  xeroEmailScope,
-  ...xeroReadOnlyScopes,
-  ...xeroWriteScopes,
-  xeroOfflineAccessScope,
-];
+/** Identity and refresh scopes; resource scopes are derived from action definitions. */
+export const xeroIdentityScopes: string[] = ["openid", "profile", "email", "offline_access"];

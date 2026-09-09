@@ -1,12 +1,12 @@
 import type { ProviderDefinition } from "../../core/types.ts";
 
 import { xeroActions } from "./actions.ts";
-import { xeroOAuthScopes } from "./scopes.ts";
+import { xeroIdentityScopes } from "./scopes.ts";
 
 const service = "xero";
 
 /**
- * Xero provider backed by the Xero Accounting and Identity APIs.
+ * Xero provider backed by the Xero Accounting, Identity, Files, Assets, Projects and Payroll NZ APIs.
  *
  * Open-source users bring their own Xero OAuth app. Xero access tokens expire
  * after 30 minutes, so the runtime refreshes them with the refresh token
@@ -22,7 +22,7 @@ export const provider: ProviderDefinition = {
       type: "oauth2",
       authorizationUrl: "https://login.xero.com/identity/connect/authorize",
       tokenUrl: "https://identity.xero.com/connect/token",
-      scopes: xeroOAuthScopes,
+      scopes: [...new Set([...xeroIdentityScopes, ...xeroActions.flatMap((action) => action.requiredScopes ?? [])])],
       tokenEndpointAuthMethod: "client_secret_post",
       // Xero web apps reject authorization requests that include a PKCE
       // code challenge ("Requested wrong apps scopes" / access_denied), so

@@ -2,6 +2,18 @@ import type { ActionDefinition } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
+import { drataAuditActions } from "./actions-audits.ts";
+import { drataControlActions } from "./actions-controls.ts";
+import { drataCustomActions } from "./actions-custom.ts";
+import { drataDirectoryActions } from "./actions-directory.ts";
+import { drataDocumentsActions } from "./actions-documents.ts";
+import { drataEvidenceActions } from "./actions-evidence.ts";
+import { drataGithubActions } from "./actions-github.ts";
+import { drataPeopleActions } from "./actions-people.ts";
+import { drataPolicyActions } from "./actions-policies.ts";
+import { drataReportsActions } from "./actions-reports.ts";
+import { drataRiskActions } from "./actions-risks.ts";
+import { drataVendorsActions } from "./actions-vendors.ts";
 
 const service = "drata" as const;
 
@@ -398,16 +410,33 @@ const listMonitoringTestsAction = defineProviderAction(service, {
 
 const getMonitoringTestAction = defineProviderAction(service, {
   name: "get_monitoring_test",
-  description: "Get one workspace-scoped Drata monitoring test by test ID.",
+  description: "Get a monitoring test after resolving exactly one testId or monitorId in the selected workspace.",
   requiredScopes: [],
-  inputSchema: s.object("The Drata monitoring test lookup.", {
-    workspaceId: workspaceIdSchema,
-    testId: s.integer("The workspace-scoped monitoring test ID."),
-  }),
+  inputSchema: s.object(
+    "The Drata monitoring test lookup.",
+    {
+      workspaceId: workspaceIdSchema,
+      testId: s.positiveInteger("The workspace-scoped monitoring test ID."),
+      monitorId: s.positiveInteger("The internal monitor ID from list_monitors."),
+    },
+    { required: ["workspaceId"] },
+  ),
   outputSchema: rawObjectSchema,
 });
 
 export const drataActions: ActionDefinition[] = [
+  ...drataGithubActions,
+  ...drataReportsActions,
+  ...drataPeopleActions,
+  ...drataVendorsActions,
+  ...drataEvidenceActions,
+  ...drataPolicyActions,
+  ...drataCustomActions,
+  ...drataDirectoryActions,
+  ...drataDocumentsActions,
+  ...drataControlActions,
+  ...drataRiskActions,
+  ...drataAuditActions,
   getCompanyAction,
   listWorkspacesAction,
   listPersonnelAction,

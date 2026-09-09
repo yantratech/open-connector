@@ -2,6 +2,13 @@ import type { ActionDefinition, JsonSchema } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
+import { xeroContactProperties, xeroInvoiceProperties, xeroIdempotencyKey } from "./accounting-schemas.ts";
+import { xeroAccountingReadActions } from "./actions-accounting-reads.ts";
+import { xeroAccountingWriteActions } from "./actions-accounting-writes.ts";
+import { xeroAssetActions } from "./actions-assets.ts";
+import { xeroFileActions } from "./actions-files.ts";
+import { xeroPayrollActions } from "./actions-payroll.ts";
+import { xeroProjectActions } from "./actions-projects.ts";
 import {
   xeroBalanceSheetReadScope,
   xeroBankTransactionsReadScope,
@@ -44,19 +51,6 @@ const bankTransactionTypes = [
   "SPEND-TRANSFER",
 ];
 const invoiceStatuses = ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID", "VOIDED", "DELETED"];
-
-const lineItemInput = s.object(
-  {
-    description: s.string({ description: "The line item description." }),
-    quantity: s.number({ description: "The quantity." }),
-    unit_amount: s.number({ description: "The unit price excluding tax." }),
-    account_code: s.string({ description: "The account code this line is posted to." }),
-  },
-  {
-    required: ["description", "quantity", "unit_amount", "account_code"],
-    description: "An invoice or bank transaction line item.",
-  },
-);
 
 const lineItemOutput = s.object(
   {
@@ -282,6 +276,12 @@ const searchResults = <T extends JsonSchema>(itemSchema: T, description: string)
   );
 
 export const xeroActions: ActionDefinition[] = [
+  ...xeroAccountingReadActions,
+  ...xeroAccountingWriteActions,
+  ...xeroProjectActions,
+  ...xeroAssetActions,
+  ...xeroPayrollActions,
+  ...xeroFileActions,
   defineProviderAction(service, {
     name: "list_organisations",
     description: "List the Xero organisations (tenants) connected to this account.",
@@ -321,10 +321,11 @@ export const xeroActions: ActionDefinition[] = [
   defineProviderAction(service, {
     name: "search_contacts",
     requiredScopes: [xeroContactsReadScope],
-    description: "Search contacts by name fragment with pagination.",
+    description: "Search contacts across names, email and contact number, or by exact account number.",
     inputSchema: s.object(
       {
         ...tenantField,
+        account_number: s.string("Exact account number."),
         search: s.string({ description: "A name fragment to match. When omitted, all contacts are returned." }),
         page: pageInput,
       },
@@ -351,10 +352,8 @@ export const xeroActions: ActionDefinition[] = [
     inputSchema: s.object(
       {
         ...tenantField,
-        name: s.string({ description: "The contact name." }),
-        email_address: s.string({ description: "The contact email address." }),
-        first_name: s.string({ description: "The contact first name." }),
-        last_name: s.string({ description: "The contact last name." }),
+        ...xeroContactProperties,
+        idempotency_key: xeroIdempotencyKey,
       },
       {
         required: ["name"],
@@ -366,10 +365,16 @@ export const xeroActions: ActionDefinition[] = [
   defineProviderAction(service, {
     name: "search_invoices",
     requiredScopes: [xeroInvoicesReadScope],
-    description: "Search invoices by status with pagination.",
+    description:
+      "Search invoices with contact, number, type, date and status filters. Defaults to excluding deleted and voided invoices.",
     inputSchema: s.object(
       {
         ...tenantField,
+        contact_ids: s.array(s.uuid("Contact ID.")),
+        invoice_numbers: s.array(s.string()),
+        type: s.stringEnum(["ACCREC", "ACCPAY"]),
+        from_date: s.date("Earliest invoice date."),
+        to_date: s.date("Latest invoice date."),
         status: s.stringEnum(invoiceStatuses, { description: "Filter by invoice status." }),
         page: pageInput,
       },
@@ -396,17 +401,8 @@ export const xeroActions: ActionDefinition[] = [
     inputSchema: s.object(
       {
         ...tenantField,
-        contact_id: xeroId,
-        type: s.stringEnum(["ACCREC", "ACCPAY"], {
-          default: "ACCREC",
-          description: "ACCREC bills the customer; ACCPAY records a bill from a supplier.",
-        }),
-        date: s.date("The invoice date. When omitted, Xero uses today in the organisation timezone."),
-        due_date: s.date(
-          "The due date. When omitted, a 30-day term is applied only when date is provided; otherwise Xero determines the date.",
-        ),
-        reference: s.string({ description: "The invoice reference." }),
-        line_items: s.array(lineItemInput, { description: "The invoice line items." }),
+        ...xeroInvoiceProperties,
+        idempotency_key: xeroIdempotencyKey,
       },
       {
         required: ["contact_id", "line_items"],
@@ -423,8 +419,9 @@ export const xeroActions: ActionDefinition[] = [
     inputSchema: s.object(
       {
         ...tenantField,
+        idempotency_key: xeroIdempotencyKey,
         invoice_id: xeroId,
-        status: s.stringEnum(["SUBMITTED", "AUTHORISED", "VOIDED"], {
+        status: s.stringEnum(["DRAFT", "SUBMITTED", "AUTHORISED", "VOIDED", "DELETED"], {
           description: "The status to move the invoice to.",
         }),
       },
@@ -473,6 +470,11 @@ export const xeroActions: ActionDefinition[] = [
     inputSchema: s.object(
       {
         ...tenantField,
+        bank_account_id: s.uuid("The bank account ID."),
+        contact_id: s.uuid("The contact ID."),
+        type: s.stringEnum(bankTransactionTypes),
+        from_date: s.date("Earliest transaction date."),
+        to_date: s.date("Latest transaction date."),
         status: s.stringEnum(bankTransactionStatuses, { description: "Filter by transaction status." }),
         page: pageInput,
       },
@@ -499,6 +501,14 @@ export const xeroActions: ActionDefinition[] = [
     inputSchema: s.object(
       {
         ...tenantField,
+        periods: s.integer({ minimum: 1, maximum: 12 }),
+        timeframe: s.stringEnum(["MONTH", "QUARTER", "YEAR"]),
+        tracking_category_id: s.uuid("The trackingCategory 1 for the ProfitAndLoss report"),
+        tracking_category_id_2: s.uuid("The trackingCategory 2 for the ProfitAndLoss report"),
+        tracking_option_id: s.uuid("The tracking option 1 for the ProfitAndLoss report"),
+        tracking_option_id_2: s.uuid("The tracking option 2 for the ProfitAndLoss report"),
+        standard_layout: s.boolean({}),
+        payments_only: s.boolean({}),
         from_date: s.date("The report start date."),
         to_date: s.date("The report end date. Defaults to today."),
       },
@@ -513,6 +523,12 @@ export const xeroActions: ActionDefinition[] = [
     inputSchema: s.object(
       {
         ...tenantField,
+        periods: s.integer({ minimum: 1, maximum: 11 }),
+        timeframe: s.stringEnum(["MONTH", "QUARTER", "YEAR"]),
+        tracking_option_id_1: s.uuid("The tracking option 1 for the Balance Sheet report"),
+        tracking_option_id_2: s.uuid("The tracking option 2 for the Balance Sheet report"),
+        standard_layout: s.boolean({}),
+        payments_only: s.boolean({}),
         date: s.date("The as-at date for the balance sheet. Defaults to today in the organisation timezone."),
       },
       { description: "Balance sheet report input." },

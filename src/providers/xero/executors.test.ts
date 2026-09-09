@@ -22,9 +22,7 @@ function createFetcher(routes: Record<string, unknown | ((request: RecordedReque
     const request: RecordedRequest = {
       url,
       method: init?.method ?? "GET",
-      headers: Object.fromEntries(
-        Object.entries(init?.headers ?? {}).map(([key, value]) => [key.toLowerCase(), String(value)]),
-      ),
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
     };
     if (init?.body) {
       request.body = JSON.parse(String(init.body));
@@ -49,10 +47,12 @@ const oauthCredential: Extract<ResolvedCredential, { authType: "oauth2" }> = {
   profile: { accountId: "oauth2", displayName: "OAuth Credential", grantedScopes: [] },
   metadata: {},
 };
-const connectionsFixture = [{ tenantId: "tenant-123", tenantName: "Demo Company", tenantType: "ORG" }];
+const connectionsFixture = [
+  { tenantId: "11111111-1111-4111-8111-111111111111", tenantName: "Demo Company", tenantType: "ORG" },
+];
 const contactsFixture = [
   {
-    ContactID: "contact-1",
+    ContactID: "22222222-2222-4222-8222-222222222222",
     Name: "Jane Doe",
     FirstName: "Jane",
     LastName: "Doe",
@@ -65,7 +65,7 @@ const contactsFixture = [
   },
 ];
 const invoiceFixture = {
-  InvoiceID: "invoice-1",
+  InvoiceID: "33333333-3333-4333-8333-333333333333",
   InvoiceNumber: "INV-0001",
   Type: "ACCREC",
   Status: "DRAFT",
@@ -131,7 +131,9 @@ describe("list_organisations", () => {
   it("maps the identity connections to tenant summaries", async () => {
     const { fetcher, requests } = createFetcher({ "https://api.xero.com/connections": connectionsFixture });
     await expect(xeroActionHandlers.list_organisations({}, { accessToken, fetcher })).resolves.toEqual({
-      organisations: [{ tenant_id: "tenant-123", tenant_name: "Demo Company", tenant_type: "ORG" }],
+      organisations: [
+        { tenant_id: "11111111-1111-4111-8111-111111111111", tenant_name: "Demo Company", tenant_type: "ORG" },
+      ],
     });
     expect(requests[0].headers.authorization).toBe(`Bearer ${accessToken}`);
   });
@@ -143,32 +145,35 @@ describe("tenant resolution", () => {
     "https://api.xero.com/api.xro/2.0/Contacts": { Contacts: contactsFixture },
   };
 
-  it("falls back to the first connection and sends the Xero-Tenant-Id header", async () => {
+  it("selects the only connection and sends the Xero-Tenant-Id header", async () => {
     const { fetcher, requests } = createFetcher(baseRoutes);
     await xeroActionHandlers.search_contacts({ search: "Jane" }, { accessToken, fetcher });
     const contactsRequest = requests.find((request) => request.url.includes("/Contacts"));
-    expect(contactsRequest?.headers["xero-tenant-id"]).toBe("tenant-123");
-    expect(new URL(contactsRequest?.url ?? "https://invalid.example").searchParams.get("SearchTerm")).toBe("Jane");
+    expect(contactsRequest?.headers["xero-tenant-id"]).toBe("11111111-1111-4111-8111-111111111111");
+    expect(new URL(contactsRequest?.url ?? "https://invalid.example").searchParams.get("searchTerm")).toBe("Jane");
   });
 
-  it("sends quoted search terms through SearchTerm instead of a where clause", async () => {
+  it("sends quoted search terms through searchTerm instead of a where clause", async () => {
     const { fetcher, requests } = createFetcher(baseRoutes);
     await xeroActionHandlers.search_contacts(
-      { tenant_id: "tenant-123", search: 'Acme "Holdings"' },
+      { tenant_id: "11111111-1111-4111-8111-111111111111", search: 'Acme "Holdings"' },
       { accessToken, fetcher },
     );
     const contactsRequest = requests.find((request) => request.url.includes("/Contacts"));
     const url = new URL(contactsRequest?.url ?? "https://invalid.example");
-    expect(url.searchParams.get("SearchTerm")).toBe('Acme "Holdings"');
+    expect(url.searchParams.get("searchTerm")).toBe('Acme "Holdings"');
     expect(url.searchParams.get("where")).toBeNull();
   });
 
   it("uses an explicit tenant_id without calling the connections endpoint", async () => {
     const { fetcher, requests } = createFetcher(baseRoutes);
-    await xeroActionHandlers.search_contacts({ tenant_id: "tenant-999", page: 2 }, { accessToken, fetcher });
+    await xeroActionHandlers.search_contacts(
+      { tenant_id: "99999999-9999-4999-8999-999999999999", page: 2 },
+      { accessToken, fetcher },
+    );
     expect(requests.some((request) => request.url.includes("/connections"))).toBe(false);
     const contactsRequest = requests.find((request) => request.url.includes("/Contacts"));
-    expect(contactsRequest?.headers["xero-tenant-id"]).toBe("tenant-999");
+    expect(contactsRequest?.headers["xero-tenant-id"]).toBe("99999999-9999-4999-8999-999999999999");
     expect(contactsRequest?.url).toContain("page=2");
   });
 
@@ -190,7 +195,7 @@ describe("ported accounting reads", () => {
     await expect(
       xeroActionHandlers.list_payments(
         {
-          tenant_id: "tenant-123",
+          tenant_id: "11111111-1111-4111-8111-111111111111",
           invoice_number: 'INV-"42"',
           invoice_id: "11111111-1111-4111-8111-111111111111",
           page: 2,
@@ -207,7 +212,7 @@ describe("ported accounting reads", () => {
     );
     expect(url.searchParams.get("page")).toBe("2");
     expect(url.searchParams.get("pageSize")).toBe("25");
-    expect(request.headers["xero-tenant-id"]).toBe("tenant-123");
+    expect(request.headers["xero-tenant-id"]).toBe("11111111-1111-4111-8111-111111111111");
   });
 
   it("rejects an invalid payment filter GUID before making a request", async () => {
@@ -215,10 +220,10 @@ describe("ported accounting reads", () => {
 
     await expect(
       xeroActionHandlers.list_payments(
-        { tenant_id: "tenant-123", payment_id: '") OR Status!="DELETED"' },
+        { tenant_id: "11111111-1111-4111-8111-111111111111", payment_id: '") OR Status!="DELETED"' },
         { accessToken, fetcher },
       ),
-    ).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/valid Xero GUID/) });
+    ).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/Xero UUID/) });
     expect(requests).toEqual([]);
   });
 
@@ -228,7 +233,7 @@ describe("ported accounting reads", () => {
     });
 
     await xeroActionHandlers.list_payments(
-      { tenant_id: "tenant-123", include_deleted: true },
+      { tenant_id: "11111111-1111-4111-8111-111111111111", include_deleted: true },
       { accessToken, fetcher },
     );
 
@@ -246,7 +251,7 @@ describe("ported accounting reads", () => {
 
     await expect(
       xeroActionHandlers.list_journals(
-        { tenant_id: "tenant-123", offset: 10, payments_only: true },
+        { tenant_id: "11111111-1111-4111-8111-111111111111", offset: 10, payments_only: true },
         { accessToken, fetcher },
       ),
     ).resolves.toEqual({ items: journals, returned: 100, next_offset: 100 });
@@ -260,12 +265,15 @@ describe("get_contact", () => {
   it("maps the PascalCase Xero payload to the snake_case output", async () => {
     const { fetcher } = createFetcher({
       "https://api.xero.com/connections": connectionsFixture,
-      "https://api.xero.com/api.xro/2.0/Contacts/contact-1": { Contacts: contactsFixture },
+      "https://api.xero.com/api.xro/2.0/Contacts/22222222-2222-4222-8222-222222222222": { Contacts: contactsFixture },
     });
     await expect(
-      xeroActionHandlers.get_contact({ tenant_id: "tenant-123", contact_id: "contact-1" }, { accessToken, fetcher }),
-    ).resolves.toEqual({
-      contact_id: "contact-1",
+      xeroActionHandlers.get_contact(
+        { tenant_id: "11111111-1111-4111-8111-111111111111", contact_id: "22222222-2222-4222-8222-222222222222" },
+        { accessToken, fetcher },
+      ),
+    ).resolves.toMatchObject({
+      contact_id: "22222222-2222-4222-8222-222222222222",
       name: "Jane Doe",
       first_name: "Jane",
       last_name: "Doe",
@@ -286,7 +294,7 @@ describe("create_contact", () => {
     });
     await xeroActionHandlers.create_contact(
       {
-        tenant_id: "tenant-123",
+        tenant_id: "11111111-1111-4111-8111-111111111111",
         name: "Jane Doe",
         email_address: "jane@example.com",
         first_name: "Jane",
@@ -294,12 +302,16 @@ describe("create_contact", () => {
       },
       { accessToken, fetcher },
     );
-    const postRequest = requests.find((request) => request.method === "POST");
+    const postRequest = requests.find((request) => request.method === "PUT");
     expect(postRequest?.body).toEqual({
-      Name: "Jane Doe",
-      EmailAddress: "jane@example.com",
-      FirstName: "Jane",
-      LastName: "Doe",
+      Contacts: [
+        {
+          Name: "Jane Doe",
+          EmailAddress: "jane@example.com",
+          FirstName: "Jane",
+          LastName: "Doe",
+        },
+      ],
     });
   });
 });
@@ -312,21 +324,25 @@ describe("create_invoice", () => {
     });
     const result = await xeroActionHandlers.create_invoice(
       {
-        tenant_id: "tenant-123",
-        contact_id: "contact-1",
+        tenant_id: "11111111-1111-4111-8111-111111111111",
+        contact_id: "22222222-2222-4222-8222-222222222222",
         line_items: [{ description: "Consulting", quantity: 2, unit_amount: 500, account_code: "200" }],
       },
       { accessToken, fetcher },
     );
-    const postRequest = requests.find((request) => request.method === "POST");
+    const postRequest = requests.find((request) => request.method === "PUT");
     expect(postRequest?.body).toEqual({
-      Type: "ACCREC",
-      Contact: { ContactID: "contact-1" },
-      Status: "DRAFT",
-      LineItems: [{ Description: "Consulting", Quantity: 2, UnitAmount: 500, AccountCode: "200" }],
+      Invoices: [
+        {
+          Type: "ACCREC",
+          Contact: { ContactID: "22222222-2222-4222-8222-222222222222" },
+          Status: "DRAFT",
+          LineItems: [{ Description: "Consulting", Quantity: 2, UnitAmount: 500, AccountCode: "200" }],
+        },
+      ],
     });
-    expect(postRequest?.headers["xero-tenant-id"]).toBe("tenant-123");
-    expect(result).toMatchObject({ invoice: { invoice_id: "invoice-1", total: 1150 } });
+    expect(postRequest?.headers["xero-tenant-id"]).toBe("11111111-1111-4111-8111-111111111111");
+    expect(result).toMatchObject({ invoice: { invoice_id: "33333333-3333-4333-8333-333333333333", total: 1150 } });
   });
 
   it("defaults the due date to 30 days after the invoice date", async () => {
@@ -336,15 +352,15 @@ describe("create_invoice", () => {
     });
     await xeroActionHandlers.create_invoice(
       {
-        tenant_id: "tenant-123",
-        contact_id: "contact-1",
+        tenant_id: "11111111-1111-4111-8111-111111111111",
+        contact_id: "22222222-2222-4222-8222-222222222222",
         date: "2026-08-01",
         line_items: [{ description: "Consulting", quantity: 1, unit_amount: 100, account_code: "200" }],
       },
       { accessToken, fetcher },
     );
-    const postRequest = requests.find((request) => request.method === "POST");
-    expect(postRequest?.body).toMatchObject({ DueDate: "2026-08-31" });
+    const postRequest = requests.find((request) => request.method === "PUT");
+    expect(postRequest?.body).toMatchObject({ Invoices: [{ DueDate: "2026-08-31" }] });
   });
 
   it("rejects when no line items are provided", async () => {
@@ -353,7 +369,11 @@ describe("create_invoice", () => {
     });
     await expect(
       xeroActionHandlers.create_invoice(
-        { tenant_id: "tenant-123", contact_id: "contact-1", line_items: [] },
+        {
+          tenant_id: "11111111-1111-4111-8111-111111111111",
+          contact_id: "22222222-2222-4222-8222-222222222222",
+          line_items: [],
+        },
         { accessToken, fetcher },
       ),
     ).rejects.toMatchObject({ status: 400 });
@@ -367,13 +387,17 @@ describe("search_invoices", () => {
       "https://api.xero.com/api.xro/2.0/Invoices": { Invoices: [invoiceFixture] },
     });
     const result = await xeroActionHandlers.search_invoices(
-      { tenant_id: "tenant-123", status: "DRAFT", page: 2 },
+      { tenant_id: "11111111-1111-4111-8111-111111111111", status: "DRAFT", page: 2 },
       { accessToken, fetcher },
     );
     const invoicesRequest = requests.find((request) => request.url.includes("/Invoices"));
     expect(invoicesRequest?.url).toContain("page=2");
     expect(invoicesRequest?.url).toContain("Statuses=DRAFT");
-    expect(result).toMatchObject({ page: 2, returned: 1, items: [{ invoice_id: "invoice-1" }] });
+    expect(result).toMatchObject({
+      page: 2,
+      returned: 1,
+      items: [{ invoice_id: "33333333-3333-4333-8333-333333333333" }],
+    });
   });
 });
 
@@ -415,7 +439,7 @@ describe("search_bank_transactions", () => {
       "https://api.xero.com/api.xro/2.0/BankTransactions": { BankTransactions: bankTransactions },
     });
     const result = await xeroActionHandlers.search_bank_transactions(
-      { tenant_id: "tenant-123", status: "PAID", page: 2 },
+      { tenant_id: "11111111-1111-4111-8111-111111111111", status: "PAID", page: 2 },
       { accessToken, fetcher },
     );
     const transactionRequest = requests.find((request) => request.url.includes("/BankTransactions"));
@@ -467,27 +491,40 @@ describe("search_bank_transactions", () => {
       },
     });
     await expect(
-      xeroActionHandlers.search_bank_transactions({ tenant_id: "tenant-123" }, { accessToken, fetcher }),
+      xeroActionHandlers.search_bank_transactions(
+        { tenant_id: "11111111-1111-4111-8111-111111111111" },
+        { accessToken, fetcher },
+      ),
     ).rejects.toMatchObject({ status: 502 });
   });
 });
 
 describe("update_invoice_status", () => {
-  it("posts only InvoiceID and Status", async () => {
+  it("checks current status and posts only InvoiceID and Status", async () => {
     const { fetcher, requests } = createFetcher({
       "https://api.xero.com/connections": connectionsFixture,
-      "https://api.xero.com/api.xro/2.0/Invoices/invoice-1": {
-        Invoices: [{ ...invoiceFixture, Status: "AUTHORISED" }],
-      },
+      "https://api.xero.com/api.xro/2.0/Invoices/33333333-3333-4333-8333-333333333333": (request: RecordedRequest) => ({
+        Invoices: [{ ...invoiceFixture, Status: request.method === "GET" ? "DRAFT" : "AUTHORISED" }],
+      }),
     });
     const result = await xeroActionHandlers.update_invoice_status(
-      { tenant_id: "tenant-123", invoice_id: "invoice-1", status: "AUTHORISED" },
+      {
+        tenant_id: "11111111-1111-4111-8111-111111111111",
+        invoice_id: "33333333-3333-4333-8333-333333333333",
+        status: "AUTHORISED",
+      },
       { accessToken, fetcher },
     );
     const postRequest = requests.find((request) => request.method === "POST");
-    expect(postRequest?.body).toEqual({ InvoiceID: "invoice-1", Status: "AUTHORISED" });
-    expect(requests.filter((request) => request.url.includes("/Invoices/invoice-1"))).toHaveLength(1);
-    expect(result).toMatchObject({ invoice: { invoice_id: "invoice-1", status: "AUTHORISED" } });
+    expect(postRequest?.body).toEqual({
+      Invoices: [{ InvoiceID: "33333333-3333-4333-8333-333333333333", Status: "AUTHORISED" }],
+    });
+    expect(
+      requests.filter((request) => request.url.includes("/Invoices/33333333-3333-4333-8333-333333333333")),
+    ).toHaveLength(2);
+    expect(result).toMatchObject({
+      invoice: { invoice_id: "33333333-3333-4333-8333-333333333333", status: "AUTHORISED" },
+    });
   });
 });
 
@@ -495,7 +532,7 @@ describe("get_invoice", () => {
   it("parses ASP.NET dates with or without a timezone offset", async () => {
     const { fetcher } = createFetcher({
       "https://api.xero.com/connections": connectionsFixture,
-      "https://api.xero.com/api.xro/2.0/Invoices/invoice-1": {
+      "https://api.xero.com/api.xro/2.0/Invoices/33333333-3333-4333-8333-333333333333": {
         Invoices: [
           {
             ...invoiceFixture,
@@ -508,7 +545,10 @@ describe("get_invoice", () => {
       },
     });
     await expect(
-      xeroActionHandlers.get_invoice({ tenant_id: "tenant-123", invoice_id: "invoice-1" }, { accessToken, fetcher }),
+      xeroActionHandlers.get_invoice(
+        { tenant_id: "11111111-1111-4111-8111-111111111111", invoice_id: "33333333-3333-4333-8333-333333333333" },
+        { accessToken, fetcher },
+      ),
     ).resolves.toMatchObject({
       date: "2025-08-01",
       due_date: "2025-08-31",
@@ -525,7 +565,7 @@ describe("get_balance_sheet", () => {
       },
     });
     await xeroActionHandlers.get_balance_sheet(
-      { tenant_id: "tenant-123", date: "2026-08-01" },
+      { tenant_id: "11111111-1111-4111-8111-111111111111", date: "2026-08-01" },
       { accessToken, fetcher },
     );
     const reportRequest = requests.find((request) => request.url.includes("/Reports/BalanceSheet"));
@@ -566,8 +606,11 @@ describe("get_profit_and_loss", () => {
       "https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss": { Reports: [reportFixture] },
     });
     await expect(
-      xeroActionHandlers.get_profit_and_loss({ tenant_id: "tenant-123" }, { accessToken, fetcher }),
-    ).resolves.toEqual({
+      xeroActionHandlers.get_profit_and_loss(
+        { tenant_id: "11111111-1111-4111-8111-111111111111" },
+        { accessToken, fetcher },
+      ),
+    ).resolves.toMatchObject({
       report_id: "report-1",
       report_name: "ProfitAndLoss",
       titles: ["Profit and Loss", "Demo Company", "01 August 2026 to 31 August 2026"],
