@@ -32,7 +32,7 @@ describe("Drata ported actions", () => {
 
     expect(result).toMatchObject({ data: [active], pagination: { page: 2 }, raw: { data: [active] } });
     expect(requests[0].url.pathname).toBe("/public/assets");
-    expect(requests[0].url.searchParams.get("size")).toBe("25");
+    expect(requests[0].url.searchParams.get("limit")).toBe("25");
     expect(requests[0].url.searchParams.get("page")).toBe("2");
     expect(requests[0].headers.get("authorization")).toBe("Bearer drata-api-token");
   });
@@ -46,7 +46,7 @@ describe("Drata ported actions", () => {
     );
 
     expect(requests[0].url.pathname).toBe("/public/v2/workspaces/42/evidence-library");
-    expect(requests[0].url.searchParams.getAll("evidenceStatuses[]")).toEqual(["ACTIVE", "ARCHIVED"]);
+    expect(requests[0].url.searchParams.getAll("statuses[]")).toEqual(["ACTIVE", "ARCHIVED"]);
     expect(requests[0].url.searchParams.get("size")).toBe("50");
     expect(requests[0].url.searchParams.get("includeTotalCount")).toBe("true");
   });

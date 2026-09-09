@@ -1,8 +1,25 @@
 import type { CredentialValidationResult } from "../../core/types.ts";
 import type { ProviderActionHandlers } from "../provider-runtime.ts";
+import type { DrataActionContext } from "./runtime-request.ts";
 
 import { booleanString, compactObject } from "../../core/cast.ts";
-import { providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import { combineProviderActionHandlers, ProviderRequestError } from "../provider-runtime.ts";
+import { drataAuditHandlers } from "./runtime-audits.ts";
+import { drataComplianceHandlers } from "./runtime-compliance.ts";
+import { drataControlHandlers } from "./runtime-controls.ts";
+import { drataCustomHandlers } from "./runtime-custom.ts";
+import { drataDirectoryHandlers } from "./runtime-directory.ts";
+import { drataDocumentsHandlers } from "./runtime-documents.ts";
+import { drataEvidenceHandlers } from "./runtime-evidence.ts";
+import { drataGithubHandlers } from "./runtime-github.ts";
+import { readDrataLegacyList } from "./runtime-legacy.ts";
+import { readMonitoringTest } from "./runtime-monitoring.ts";
+import { drataPeopleHandlers } from "./runtime-people.ts";
+import { personnelRecord } from "./runtime-personnel.ts";
+import { drataPolicyHandlers } from "./runtime-policies.ts";
+import { requestDrataJson } from "./runtime-request.ts";
+import { drataRiskHandlers } from "./runtime-risks.ts";
+import { drataVendorsHandlers } from "./runtime-vendors.ts";
 
 export const drataRegionBaseUrls = {
   us: "https://public-api.drata.com/public/v2",
@@ -14,188 +31,182 @@ export const drataDefaultRegion = "us" as const;
 
 type DrataRegion = keyof typeof drataRegionBaseUrls;
 
-export interface DrataActionContext {
-  apiKey: string;
-  baseUrl: string;
-  fetcher: typeof fetch;
-  signal?: AbortSignal;
-}
-
 type DrataActionHandler = (input: Record<string, unknown>, context: DrataActionContext) => Promise<unknown>;
 
-type DrataRequestOptions = {
-  path: string;
-  apiKey: string;
-  baseUrl: string;
-  fetcher: typeof fetch;
-  mode: "validate" | "execute";
-  query?: Record<string, string | string[] | undefined>;
-  signal?: AbortSignal;
-};
-
-export const drataActionHandlers: ProviderActionHandlers<"drata", DrataActionHandler> = {
-  get_company(_input, context) {
-    return getCompany(context);
-  },
-  list_workspaces(input, context) {
-    return listRecords("/workspaces", input, context, {});
-  },
-  list_personnel(input, context) {
-    return listRecords("/personnel", input, context, {
-      "employmentStatus[]": asOptionalStringArray(input.employmentStatus),
-      "complianceStatus[]": asOptionalStringArray(input.complianceStatus),
-    });
-  },
-  get_personnel(input, context) {
-    return getRecord(
-      `/personnel/${encodeURIComponent(requirePathIdentifier(input.personnelId, "personnelId"))}`,
-      input,
-      context,
-      "personnel",
-    );
-  },
-  list_controls(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    return listRecords(`/workspaces/${workspaceId}/controls`, input, context, {
-      isMonitored: booleanString(input.isMonitored),
-      isReady: booleanString(input.isReady),
-      hasEvidence: booleanString(input.hasEvidence),
-      hasPolicy: booleanString(input.hasPolicy),
-      hasPassingTest: booleanString(input.hasPassingTest),
-      ticketStatus: asOptionalString(input.ticketStatus),
-      policyId: asOptionalIntegerString(input.policyId),
-      isEnabled: booleanString(input.isEnabled),
-      isArchived: booleanString(input.isArchived),
-    });
-  },
-  get_control(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    const controlId = requirePathIdentifier(input.controlId, "controlId");
-    return getRecord(
-      `/workspaces/${workspaceId}/controls/${encodeURIComponent(controlId)}`,
-      input,
-      context,
-      "control",
-      {
-        cursor: asOptionalString(input.cursor),
-        size: asOptionalIntegerString(input.size),
-        sort: asOptionalString(input.sort),
-        sortDir: asOptionalSortDirection(input.sortDir),
-      },
-    );
-  },
-  list_vendors(input, context) {
-    return listRecords("/vendors", input, context, {
-      category: asOptionalString(input.category),
-      impactLevel: asOptionalString(input.impactLevel),
-      renewalDate: asOptionalString(input.renewalDate),
-      renewalScheduleType: asOptionalString(input.renewalScheduleType),
-      risk: asOptionalString(input.risk),
-      status: asOptionalString(input.status),
-      type: asOptionalString(input.type),
-    });
-  },
-  get_vendor(input, context) {
-    const vendorId = requireInteger(input.vendorId, "vendorId");
-    return getRecord(`/vendors/${vendorId}`, input, context, "vendor");
-  },
-  async list_assets(input, context) {
-    const result = await listRecords(
-      "/assets",
-      input,
-      context,
-      { page: asOptionalIntegerString(input.page) },
-      legacyDrataBaseUrl(context.baseUrl),
-    );
-    if (input.includeRemoved !== true) {
-      result.data = result.data.filter((item) => asObject(item)?.removedAt == null);
-      result.raw = { ...result.raw, data: result.data };
-    }
-    return result;
-  },
-  list_monitors(input, context) {
-    return listRecords(
-      "/monitors",
-      input,
-      context,
-      { page: asOptionalIntegerString(input.page) },
-      legacyDrataBaseUrl(context.baseUrl),
-    );
-  },
-  list_policies(input, context) {
-    return listRecords(
-      "/policies",
-      input,
-      context,
-      { page: asOptionalIntegerString(input.page) },
-      legacyDrataBaseUrl(context.baseUrl),
-    );
-  },
-  async list_events(input, context) {
-    const since = asOptionalString(input.since);
-    const sinceTimestamp = since === undefined ? undefined : Date.parse(since);
-    if (sinceTimestamp !== undefined && !Number.isFinite(sinceTimestamp)) {
-      throw new ProviderRequestError(400, "since must be a valid ISO 8601 timestamp");
-    }
-    const result = await listRecords("/events", input, context, {
-      size: asOptionalIntegerString(input.size) ?? "50",
-      sort: asOptionalString(input.sort) ?? "createdAt",
-      sortDir: asOptionalSortDirection(input.sortDir) ?? "DESC",
-      type: asOptionalString(input.type),
-      category: asOptionalString(input.category),
-      createdAtFrom: since,
-    });
-    if (sinceTimestamp !== undefined) {
-      result.data = result.data.filter((event) => {
-        const createdAt = asOptionalString(asObject(event)?.createdAt);
-        const eventTimestamp = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
-        return Number.isFinite(eventTimestamp) && eventTimestamp >= sinceTimestamp;
+export const drataActionHandlers: ProviderActionHandlers<"drata", DrataActionHandler> = combineProviderActionHandlers(
+  "drata",
+  drataGithubHandlers,
+  drataComplianceHandlers,
+  drataPeopleHandlers,
+  drataVendorsHandlers,
+  drataEvidenceHandlers,
+  drataPolicyHandlers,
+  drataCustomHandlers,
+  drataDirectoryHandlers,
+  drataDocumentsHandlers,
+  drataControlHandlers,
+  drataRiskHandlers,
+  drataAuditHandlers,
+  {
+    get_company(_input, context) {
+      return getCompany(context);
+    },
+    list_workspaces(input, context) {
+      return listRecords("/workspaces", input, context, {});
+    },
+    async list_personnel(input, context) {
+      const result = await readDrataLegacyList(context, "/personnel", input, ["employmentStatus", "complianceStatus"]);
+      return { ...result, data: result.data.map((value) => personnelRecord(value, input.fields)) };
+    },
+    get_personnel(input, context) {
+      return getRecord(
+        `/personnel/${encodeURIComponent(requirePathIdentifier(input.personnelId, "personnelId"))}`,
+        input,
+        context,
+        "personnel",
+      );
+    },
+    list_controls(input, context) {
+      const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+      return listRecords(`/workspaces/${workspaceId}/controls`, input, context, {
+        isMonitored: booleanString(input.isMonitored),
+        isReady: booleanString(input.isReady),
+        hasEvidence: booleanString(input.hasEvidence),
+        hasPolicy: booleanString(input.hasPolicy),
+        hasPassingTest: booleanString(input.hasPassingTest),
+        ticketStatus: asOptionalString(input.ticketStatus),
+        policyId: asOptionalIntegerString(input.policyId),
+        isEnabled: booleanString(input.isEnabled),
+        isArchived: booleanString(input.isArchived),
       });
-      result.raw = { ...result.raw, data: result.data };
-    }
-    return result;
+    },
+    get_control(input, context) {
+      const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+      const controlId = requirePathIdentifier(input.controlId, "controlId");
+      return getRecord(
+        `/workspaces/${workspaceId}/controls/${encodeURIComponent(controlId)}`,
+        input,
+        context,
+        "control",
+        {
+          cursor: asOptionalString(input.cursor),
+          size: asOptionalIntegerString(input.size),
+          sort: asOptionalString(input.sort),
+          sortDir: asOptionalSortDirection(input.sortDir),
+        },
+      );
+    },
+    list_vendors(input, context) {
+      return listRecords("/vendors", input, context, {
+        category: asOptionalString(input.category),
+        impactLevel: asOptionalString(input.impactLevel),
+        renewalDate: asOptionalString(input.renewalDate),
+        renewalScheduleType: asOptionalString(input.renewalScheduleType),
+        risk: asOptionalString(input.risk),
+        status: asOptionalString(input.status),
+        type: asOptionalString(input.type),
+      });
+    },
+    get_vendor(input, context) {
+      const vendorId = requireInteger(input.vendorId, "vendorId");
+      return getRecord(`/vendors/${vendorId}`, input, context, "vendor");
+    },
+    async list_assets(input, context) {
+      const result = await listRecords(
+        "/assets",
+        input,
+        context,
+        { page: asOptionalIntegerString(input.page) },
+        legacyDrataBaseUrl(context.baseUrl),
+      );
+      if (input.includeRemoved !== true) {
+        result.data = result.data.filter((item) => asObject(item)?.removedAt == null);
+        result.raw = { ...result.raw, data: result.data };
+      }
+      return result;
+    },
+    list_monitors(input, context) {
+      return listRecords(
+        "/monitors",
+        input,
+        context,
+        { page: asOptionalIntegerString(input.page) },
+        legacyDrataBaseUrl(context.baseUrl),
+      );
+    },
+    list_policies(input, context) {
+      return listRecords(
+        "/policies",
+        input,
+        context,
+        { page: asOptionalIntegerString(input.page) },
+        legacyDrataBaseUrl(context.baseUrl),
+      );
+    },
+    async list_events(input, context) {
+      const since = asOptionalString(input.since);
+      const sinceTimestamp = since === undefined ? undefined : Date.parse(since);
+      if (sinceTimestamp !== undefined && !Number.isFinite(sinceTimestamp)) {
+        throw new ProviderRequestError(400, "since must be a valid ISO 8601 timestamp");
+      }
+      const result = await listRecords("/events", input, context, {
+        size: asOptionalIntegerString(input.size) ?? "50",
+        sort: asOptionalString(input.sort) ?? "createdAt",
+        sortDir: asOptionalSortDirection(input.sortDir) ?? "DESC",
+        type: asOptionalString(input.type),
+        category: asOptionalString(input.category),
+        createdAtFrom: since,
+      });
+      if (sinceTimestamp !== undefined) {
+        result.data = result.data.filter((event) => {
+          const createdAt = asOptionalString(asObject(event)?.createdAt);
+          const eventTimestamp = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
+          return Number.isFinite(eventTimestamp) && eventTimestamp >= sinceTimestamp;
+        });
+        result.raw = { ...result.raw, data: result.data };
+      }
+      return result;
+    },
+    list_frameworks(input, context) {
+      const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+      return listRecords(`/workspaces/${workspaceId}/frameworks`, input, context, {});
+    },
+    list_framework_requirements(input, context) {
+      const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+      return listRecords(`/workspaces/${workspaceId}/framework-requirements`, input, context, {
+        size: asOptionalIntegerString(input.size) ?? "20",
+        includeTotalCount: booleanString(input.includeTotalCount) ?? "true",
+      });
+    },
+    list_evidence_library(input, context) {
+      const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+      return listRecords(`/workspaces/${workspaceId}/evidence-library`, input, context, {
+        name: asOptionalString(input.name),
+        "statuses[]": asOptionalStringArray(input.statuses),
+        size: asOptionalIntegerString(input.size) ?? "50",
+        includeTotalCount: booleanString(input.includeTotalCount) ?? "true",
+      });
+    },
+    get_evidence_item(input, context) {
+      const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+      const evidenceId = requireInteger(input.evidenceId, "evidenceId");
+      return getRawRecord(`/workspaces/${workspaceId}/evidence-library/${evidenceId}`, input, context);
+    },
+    list_risk_registers(input, context) {
+      return listRecords("/risk-registers", input, context, {});
+    },
+    list_monitoring_tests(input, context) {
+      const workspaceId = requireInteger(input.workspaceId, "workspaceId");
+      return listRecords(`/workspaces/${workspaceId}/monitoring-tests`, input, context, {
+        size: asOptionalIntegerString(input.size) ?? "50",
+        includeTotalCount: booleanString(input.includeTotalCount) ?? "true",
+      });
+    },
+    get_monitoring_test(input, context) {
+      return readMonitoringTest(input, context, false);
+    },
   },
-  list_frameworks(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    return listRecords(`/workspaces/${workspaceId}/frameworks`, input, context, {});
-  },
-  list_framework_requirements(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    return listRecords(`/workspaces/${workspaceId}/framework-requirements`, input, context, {
-      size: asOptionalIntegerString(input.size) ?? "20",
-      includeTotalCount: booleanString(input.includeTotalCount) ?? "true",
-    });
-  },
-  list_evidence_library(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    return listRecords(`/workspaces/${workspaceId}/evidence-library`, input, context, {
-      name: asOptionalString(input.name),
-      "evidenceStatuses[]": asOptionalStringArray(input.statuses),
-      size: asOptionalIntegerString(input.size) ?? "50",
-      includeTotalCount: booleanString(input.includeTotalCount) ?? "true",
-    });
-  },
-  get_evidence_item(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    const evidenceId = requireInteger(input.evidenceId, "evidenceId");
-    return getRawRecord(`/workspaces/${workspaceId}/evidence-library/${evidenceId}`, input, context);
-  },
-  list_risk_registers(input, context) {
-    return listRecords("/risk-registers", input, context, {});
-  },
-  list_monitoring_tests(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    return listRecords(`/workspaces/${workspaceId}/monitoring-tests`, input, context, {
-      size: asOptionalIntegerString(input.size) ?? "50",
-      includeTotalCount: booleanString(input.includeTotalCount) ?? "true",
-    });
-  },
-  get_monitoring_test(input, context) {
-    const workspaceId = requireInteger(input.workspaceId, "workspaceId");
-    const testId = requireInteger(input.testId, "testId");
-    return getRawRecord(`/workspaces/${workspaceId}/monitoring-tests/${testId}`, input, context);
-  },
-};
+);
 
 export async function validateDrataCredential(
   input: { apiKey: string; values: Record<string, string> },
@@ -257,6 +268,7 @@ async function listRecords(
   extraQuery: Record<string, string | string[] | undefined>,
   baseUrl = context.baseUrl,
 ) {
+  if (baseUrl !== context.baseUrl) return readDrataLegacyList(context, path, input);
   const payload = requireObject(
     await requestDrataJson({
       path,
@@ -324,65 +336,6 @@ async function getRecord(
     [outputKey]: record,
     raw: record,
   };
-}
-
-async function requestDrataJson(options: DrataRequestOptions) {
-  const url = new URL(`${options.baseUrl}${options.path}`);
-  for (const [key, value] of Object.entries(options.query ?? {})) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        url.searchParams.append(key, item);
-      }
-    } else if (value !== undefined) {
-      url.searchParams.set(key, value);
-    }
-  }
-
-  const response = await options.fetcher(url, {
-    method: "GET",
-    headers: {
-      accept: "application/json",
-      authorization: `Bearer ${options.apiKey}`,
-      "user-agent": providerUserAgent,
-    },
-    signal: options.signal,
-  });
-  const payload = await readJson(response);
-
-  if (!response.ok) {
-    throw mapDrataError(response, payload, options.mode);
-  }
-
-  return payload;
-}
-
-function mapDrataError(response: Response, payload: unknown, mode: "validate" | "execute") {
-  const message =
-    readNonEmptyString(payload, "message") ??
-    readNonEmptyString(payload, "error") ??
-    `Drata API request failed with status ${response.status}`;
-  if (response.status === 401 || response.status === 403) {
-    return new ProviderRequestError(mode === "validate" ? 400 : 401, message);
-  }
-
-  if (response.status === 400 || response.status === 404 || response.status === 412) {
-    return new ProviderRequestError(response.status, message);
-  }
-
-  return new ProviderRequestError(response.status, message);
-}
-
-async function readJson(response: Response) {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new ProviderRequestError(502, "Drata returned an invalid JSON response");
-  }
 }
 
 function commonListQuery(input: Record<string, unknown>) {

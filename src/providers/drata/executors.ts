@@ -4,7 +4,7 @@ import type {
   ProviderExecutors,
   ProviderProxyExecutor,
 } from "../../core/types.ts";
-import type { DrataActionContext } from "./runtime.ts";
+import type { DrataActionContext } from "./runtime-request.ts";
 
 import { defineProviderExecutors, defineProviderProxy, requireApiKeyCredential } from "../provider-runtime.ts";
 import { drataActionHandlers, drataDefaultRegion, drataRegionBaseUrls, validateDrataCredential } from "./runtime.ts";
@@ -19,6 +19,8 @@ export const executors: ProviderExecutors = defineProviderExecutors<DrataActionC
     const region = typeof credential.metadata.region === "string" ? credential.metadata.region : drataDefaultRegion;
     return {
       apiKey: credential.apiKey,
+      githubToken: credential.values.githubToken,
+      transitFiles: context.transitFiles,
       baseUrl:
         drataRegionBaseUrls[region as keyof typeof drataRegionBaseUrls] ?? drataRegionBaseUrls[drataDefaultRegion],
       fetcher,

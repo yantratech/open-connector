@@ -2,6 +2,10 @@ import type { ActionDefinition } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
+import { kandjiDeviceActions } from "./actions-devices.ts";
+import { kandjiFleetActions } from "./actions-fleet.ts";
+import { kandjiLibraryActions } from "./actions-library.ts";
+import { kandjiPrismActions } from "./actions-prism.ts";
 
 const service = "kandji";
 
@@ -45,6 +49,10 @@ const userSchema = s.object("A normalized Kandji directory user record.", {
 });
 
 export const kandjiActions: ActionDefinition[] = [
+  ...kandjiDeviceActions,
+  ...kandjiFleetActions,
+  ...kandjiLibraryActions,
+  ...kandjiPrismActions,
   defineProviderAction(service, {
     name: "list_blueprints",
     description: "List Kandji blueprints with optional ID, name, and pagination filters.",

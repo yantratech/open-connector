@@ -1,5 +1,5 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { KandjiActionContext } from "./runtime.ts";
+import type { KandjiActionContext } from "./runtime-request.ts";
 
 import { defineProviderExecutors, requireApiKeyCredential } from "../provider-runtime.ts";
 import { kandjiActionHandlers, normalizeKandjiApiUrl, validateKandjiCredential } from "./runtime.ts";
@@ -15,6 +15,7 @@ export const executors: ProviderExecutors = defineProviderExecutors<KandjiAction
       apiKey: credential.apiKey,
       apiUrl: normalizeKandjiApiUrl(credential.metadata.apiUrl ?? credential.values.apiUrl),
       fetcher,
+      transitFiles: context.transitFiles,
       signal: context.signal,
     };
   },

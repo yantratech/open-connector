@@ -1,0 +1,273 @@
+import type { JsonSchema } from "../../core/types.ts";
+
+import { s } from "../../core/json-schema.ts";
+export const xeroIdempotencyKey: JsonSchema = s.string({
+  minLength: 1,
+  maxLength: 128,
+  description: "Reuse the same key when safely retrying the same mutation.",
+});
+const tracking: JsonSchema = s.array(
+  s.object(
+    { tracking_category_id: s.uuid("The Xero resource ID."), tracking_option_id: s.uuid("The Xero resource ID.") },
+    { required: ["tracking_category_id", "tracking_option_id"] },
+  ),
+  { maxItems: 2 },
+);
+const xeroPhoneProperties: Record<string, JsonSchema> = {
+  phone_type: s.stringEnum(["DEFAULT", "DDI", "MOBILE", "FAX", "OFFICE"]),
+  phone_number: s.string("PhoneNumber", { maxLength: 50 }),
+  phone_area_code: s.string("PhoneAreaCode", { maxLength: 10 }),
+  phone_country_code: s.string("PhoneCountryCode", { maxLength: 20 }),
+};
+const xeroAddressProperties: Record<string, JsonSchema> = {
+  address_type: s.stringEnum(["POBOX", "STREET"]),
+  address_line1: s.string("AddressLine1", { maxLength: 500 }),
+  address_line2: s.string("AddressLine2", { maxLength: 500 }),
+  address_line3: s.string("AddressLine3", { maxLength: 500 }),
+  address_line4: s.string("AddressLine4", { maxLength: 500 }),
+  city: s.string("City", { maxLength: 255 }),
+  region: s.string("Region", { maxLength: 255 }),
+  postal_code: s.string("PostalCode", { maxLength: 50 }),
+  country: s.string("Country", { maxLength: 50 }),
+  attention_to: s.string("AttentionTo", { maxLength: 255 }),
+};
+const xeroPurchaseProperties: Record<string, JsonSchema> = {
+  unit_price: s.number({}),
+  account_code: s.string("AccountCode", {}),
+  cogs_account_code: s.string("COGSAccountCode", {}),
+  tax_type: s.string("TaxType", {}),
+};
+const xeroScheduleProperties: Record<string, JsonSchema> = {
+  period: s.integer({ minimum: 1 }),
+  unit: s.stringEnum(["WEEKLY", "MONTHLY"]),
+  due_date: s.integer({ minimum: 0 }),
+  due_date_type: s.stringEnum([
+    "DAYSAFTERBILLDATE",
+    "DAYSAFTERBILLMONTH",
+    "DAYSAFTERINVOICEDATE",
+    "DAYSAFTERINVOICEMONTH",
+    "OFCURRENTMONTH",
+    "OFFOLLOWINGMONTH",
+  ]),
+  start_date: s.date("Calendar date (YYYY-MM-DD)."),
+  end_date: s.date("Calendar date (YYYY-MM-DD)."),
+};
+const xeroManualJournalLineProperties: Record<string, JsonSchema> = {
+  line_amount: { ...s.number(), multipleOf: 0.0001 },
+  account_code: s.string("AccountCode", {}),
+  account_id: s.uuid("AccountID"),
+  description: s.string("Description", {}),
+  tax_type: s.string("TaxType", {}),
+  tax_amount: s.number({}),
+  tracking,
+};
+const xeroLineItemProperties: Record<string, JsonSchema> = {
+  line_item_id: s.uuid("LineItemID"),
+  description: s.string("Description", {}),
+  quantity: s.number({}),
+  unit_amount: s.number({}),
+  item_code: s.string("ItemCode", {}),
+  account_code: s.string("AccountCode", {}),
+  account_id: s.uuid("AccountID"),
+  tax_type: s.string("TaxType", {}),
+  tax_amount: s.number({}),
+  discount_rate: s.number({}),
+  discount_amount: s.number({}),
+  tracking,
+};
+export const xeroLinkedTransactionProperties: Record<string, JsonSchema> = {
+  source_transaction_id: s.uuid("SourceTransactionID"),
+  source_line_item_id: s.uuid("SourceLineItemID"),
+  contact_id: s.uuid("ContactID"),
+  target_transaction_id: s.uuid("TargetTransactionID"),
+  target_line_item_id: s.uuid("TargetLineItemID"),
+};
+export const xeroManualJournalProperties: Record<string, JsonSchema> = {
+  narration: s.nonEmptyString("A non-empty value."),
+  date: s.date("Calendar date (YYYY-MM-DD)."),
+  line_amount_types: s.stringEnum(["Exclusive", "Inclusive", "NoTax"]),
+  url: s.string("Url", {}),
+  show_on_cash_basis_reports: s.boolean({}),
+  journal_lines: s.array(s.object(xeroManualJournalLineProperties, { required: ["line_amount"] }), {
+    minItems: 2,
+    description: "Balanced debit and credit lines. Complete replacement set on update.",
+  }),
+};
+export const xeroItemProperties: Record<string, JsonSchema> = {
+  code: s.nonEmptyString("A non-empty value."),
+  inventory_asset_account_code: s.string("InventoryAssetAccountCode", {}),
+  name: s.nonEmptyString("A non-empty value."),
+  is_sold: s.boolean({}),
+  is_purchased: s.boolean({}),
+  description: s.string("Description", { maxLength: 4000 }),
+  purchase_description: s.string("PurchaseDescription", { maxLength: 4000 }),
+  is_tracked_as_inventory: s.boolean({}),
+  purchase_details: s.object(xeroPurchaseProperties),
+  sales_details: s.object(xeroPurchaseProperties),
+};
+export const xeroAccountProperties: Record<string, JsonSchema> = {
+  code: s.nonEmptyString("A non-empty value."),
+  name: s.nonEmptyString("A non-empty value."),
+  type: s.stringEnum([
+    "BANK",
+    "CURRENT",
+    "CURRLIAB",
+    "DEPRECIATN",
+    "DIRECTCOSTS",
+    "EQUITY",
+    "EXPENSE",
+    "FIXED",
+    "INVENTORY",
+    "LIABILITY",
+    "NONCURRENT",
+    "OTHERINCOME",
+    "OVERHEADS",
+    "PREPAYMENT",
+    "REVENUE",
+    "SALES",
+    "TERMLIAB",
+    "PAYG",
+  ]),
+  bank_account_number: s.string("BankAccountNumber", {}),
+  description: s.string("Description", {}),
+  bank_account_type: s.stringEnum(["BANK", "CREDITCARD", "PAYPAL", "NONE", ""]),
+  currency_code: s.string({ pattern: "^[A-Z]{3}$" }),
+  tax_type: s.string("TaxType", {}),
+  enable_payments_to_account: s.boolean({}),
+  show_in_expense_claims: s.boolean({}),
+  add_to_watchlist: s.boolean({}),
+};
+export const xeroRepeatingInvoiceProperties: Record<string, JsonSchema> = {
+  type: s.stringEnum(["ACCPAY", "ACCREC"]),
+  line_amount_types: s.stringEnum(["Exclusive", "Inclusive", "NoTax"]),
+  reference: s.string("Reference", {}),
+  branding_theme_id: s.uuid("BrandingThemeID"),
+  currency_code: s.string({ pattern: "^[A-Z]{3}$" }),
+  approved_for_sending: s.boolean({ default: false }),
+  send_copy: s.boolean({ default: false }),
+  mark_as_sent: s.boolean({ default: false }),
+  include_pdf: s.boolean({ default: false }),
+  contact_id: s.uuid("The Xero resource ID."),
+  line_items: s.array(s.object(xeroLineItemProperties), {
+    minItems: 1,
+    description: "Complete replacement line set when updating. Include line_item_id to retain existing lines.",
+  }),
+  schedule: s.object(xeroScheduleProperties, {
+    required: ["period", "unit", "due_date", "due_date_type", "start_date"],
+  }),
+};
+export const xeroPurchaseOrderProperties: Record<string, JsonSchema> = {
+  date: s.date("Calendar date (YYYY-MM-DD)."),
+  delivery_date: s.date("Calendar date (YYYY-MM-DD)."),
+  line_amount_types: s.stringEnum(["Exclusive", "Inclusive", "NoTax"]),
+  purchase_order_number: s.string("PurchaseOrderNumber", {}),
+  reference: s.string("Reference", {}),
+  branding_theme_id: s.uuid("BrandingThemeID"),
+  currency_code: s.string({ pattern: "^[A-Z]{3}$" }),
+  delivery_address: s.string("DeliveryAddress", {}),
+  attention_to: s.string("AttentionTo", {}),
+  telephone: s.string("Telephone", {}),
+  delivery_instructions: s.string("DeliveryInstructions", {}),
+  expected_arrival_date: s.date("Calendar date (YYYY-MM-DD)."),
+  currency_rate: s.number({}),
+  contact_id: s.uuid("The Xero resource ID."),
+  line_items: s.array(s.object(xeroLineItemProperties), {
+    minItems: 1,
+    description: "Complete replacement line set when updating. Include line_item_id to retain existing lines.",
+  }),
+};
+export const xeroQuoteProperties: Record<string, JsonSchema> = {
+  quote_number: s.string("QuoteNumber", { maxLength: 255 }),
+  reference: s.string("Reference", { maxLength: 4000 }),
+  terms: s.string("Terms", { maxLength: 4000 }),
+  date: s.date("Calendar date (YYYY-MM-DD)."),
+  expiry_date: s.date("Calendar date (YYYY-MM-DD)."),
+  currency_code: s.string({ pattern: "^[A-Z]{3}$" }),
+  currency_rate: s.number({}),
+  title: s.string("Title", { maxLength: 100 }),
+  summary: s.string("Summary", { maxLength: 3000 }),
+  branding_theme_id: s.uuid("BrandingThemeID"),
+  line_amount_types: s.stringEnum(["EXCLUSIVE", "INCLUSIVE", "NOTAX"]),
+  contact_id: s.uuid("The Xero resource ID."),
+  line_items: s.array(s.object(xeroLineItemProperties), {
+    minItems: 1,
+    description: "Complete replacement line set when updating. Include line_item_id to retain existing lines.",
+  }),
+};
+export const xeroCreditNoteProperties: Record<string, JsonSchema> = {
+  type: s.stringEnum(["ACCPAYCREDIT", "ACCRECCREDIT"]),
+  date: s.date("Calendar date (YYYY-MM-DD)."),
+  due_date: s.date("Calendar date (YYYY-MM-DD)."),
+  line_amount_types: s.stringEnum(["Exclusive", "Inclusive", "NoTax"]),
+  credit_note_number: s.string("CreditNoteNumber", {}),
+  reference: s.string("Reference", {}),
+  currency_code: s.string({ pattern: "^[A-Z]{3}$" }),
+  currency_rate: s.number({}),
+  branding_theme_id: s.uuid("BrandingThemeID"),
+  contact_id: s.uuid("The Xero resource ID."),
+  line_items: s.array(s.object(xeroLineItemProperties), {
+    minItems: 1,
+    description: "Complete replacement line set when updating. Include line_item_id to retain existing lines.",
+  }),
+};
+export const xeroBankTransactionProperties: Record<string, JsonSchema> = {
+  type: s.stringEnum([
+    "RECEIVE",
+    "SPEND",
+    "RECEIVE-OVERPAYMENT",
+    "SPEND-OVERPAYMENT",
+    "RECEIVE-PREPAYMENT",
+    "SPEND-PREPAYMENT",
+  ]),
+  date: s.date("Calendar date (YYYY-MM-DD)."),
+  reference: s.string("Reference", {}),
+  currency_code: s.string({ pattern: "^[A-Z]{3}$" }),
+  currency_rate: s.number({}),
+  url: s.string("Url", {}),
+  line_amount_types: s.stringEnum(["Exclusive", "Inclusive", "NoTax"]),
+  contact_id: s.uuid("The Xero resource ID."),
+  line_items: s.array(s.object(xeroLineItemProperties), {
+    minItems: 1,
+    description: "Complete replacement line set when updating. Include line_item_id to retain existing lines.",
+  }),
+  bank_account_id: s.uuid("The Xero resource ID."),
+};
+export const xeroInvoiceProperties: Record<string, JsonSchema> = {
+  type: s.stringEnum(["ACCREC", "ACCPAY"]),
+  date: s.date("Calendar date (YYYY-MM-DD)."),
+  due_date: s.date("Calendar date (YYYY-MM-DD)."),
+  line_amount_types: s.stringEnum(["Exclusive", "Inclusive", "NoTax"]),
+  invoice_number: s.string("InvoiceNumber", { maxLength: 255 }),
+  reference: s.string("Reference", {}),
+  currency_code: s.string({ pattern: "^[A-Z]{3}$" }),
+  currency_rate: s.number({}),
+  branding_theme_id: s.uuid("BrandingThemeID"),
+  url: s.string("Url", {}),
+  expected_payment_date: s.date("Calendar date (YYYY-MM-DD)."),
+  planned_payment_date: s.date("Calendar date (YYYY-MM-DD)."),
+  contact_id: s.uuid("The Xero resource ID."),
+  line_items: s.array(s.object(xeroLineItemProperties), {
+    minItems: 1,
+    description: "Complete replacement line set when updating. Include line_item_id to retain existing lines.",
+  }),
+};
+export const xeroContactProperties: Record<string, JsonSchema> = {
+  name: s.nonEmptyString("A non-empty value."),
+  first_name: s.string("FirstName", { maxLength: 255 }),
+  last_name: s.string("LastName", { maxLength: 255 }),
+  email_address: s.string("EmailAddress", { maxLength: 255 }),
+  account_number: s.string("AccountNumber", { maxLength: 50 }),
+  contact_number: s.string("ContactNumber", { maxLength: 50 }),
+  company_number: s.string("CompanyNumber", { maxLength: 50 }),
+  tax_number: s.string("TaxNumber", { maxLength: 50 }),
+  bank_account_details: s.string("BankAccountDetails", {}),
+  website: s.string("Website", {}),
+  default_currency: s.string({ pattern: "^[A-Z]{3}$" }),
+  sales_default_account_code: s.string("SalesDefaultAccountCode", {}),
+  purchases_default_account_code: s.string("PurchasesDefaultAccountCode", {}),
+  accounts_receivable_tax_type: s.string("AccountsReceivableTaxType", {}),
+  accounts_payable_tax_type: s.string("AccountsPayableTaxType", {}),
+  discount: s.number({}),
+  addresses: s.array(s.object(xeroAddressProperties)),
+  phones: s.array(s.object(xeroPhoneProperties)),
+};
