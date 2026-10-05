@@ -26,6 +26,13 @@ jobs:
             test ! -e /usr/local/bin/npx
             node --version
           '
+      - name: Verify patched OpenSSL packages
+        run: |
+          docker run --rm --network none --entrypoint sh open-connector-runtime-test -ec '
+            apk info -e "libssl3>=3.5.8-r0"
+            apk info -e "libcrypto3>=3.5.8-r0"
+            apk info -v libssl3 libcrypto3
+          '
       - name: Verify migration entrypoint
         run: docker run --rm --network none open-connector-runtime-test migrate
       - name: Verify server and health check
