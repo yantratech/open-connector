@@ -76,6 +76,9 @@
     "vitest": "^4.1.9",
     "wrangler": "^4.127.1"
   },
+  "overrides": {
+    "ws": "^8.21.1"
+  },
   "allowScripts": {
     "fsevents@2.3.3": true,
     "esbuild@0.28.1": true,
