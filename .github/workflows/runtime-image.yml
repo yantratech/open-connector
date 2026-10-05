@@ -1,0 +1,48 @@
+name: Runtime image validation
+on:
+  pull_request:
+    paths:
+      - "docker/**"
+      - "package*.json"
+      - ".github/workflows/runtime-image.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build production image without publishing
+        run: docker build --pull -f docker/Dockerfile -t open-connector-runtime-test .
+      - name: Verify npm is absent
+        run: |
+          docker run --rm --network none --entrypoint sh open-connector-runtime-test -ec '
+            test ! -e /usr/local/lib/node_modules/npm
+            test ! -e /usr/local/bin/npm
+            test ! -e /usr/local/bin/npx
+            node --version
+          '
+      - name: Verify migration entrypoint
+        run: docker run --rm --network none open-connector-runtime-test migrate
+      - name: Verify server and health check
+        run: |
+          set -euo pipefail
+          docker run -d --name runtime-smoke --network none \
+            -e OOMOL_CONNECT_ADMIN_TOKEN=synthetic-ci-admin \
+            -e OOMOL_CONNECT_RUNTIME_TOKEN=synthetic-ci-runtime \
+            open-connector-runtime-test
+          trap 'docker logs runtime-smoke; docker rm -fv runtime-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec runtime-smoke node scripts/healthcheck.ts; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' runtime-smoke)" != true ]; then
+              exit 1
+            fi
+            sleep 2
+          done
+          exit 1
