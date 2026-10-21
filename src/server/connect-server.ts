@@ -972,7 +972,14 @@ export class ConnectServer {
         service,
         connectionName,
         clientConfig: readOAuthClientConfigInput(body),
-        sourceConnectionId: optionalString(body.sourceConnectionId),
+        sourceConnectionId:
+          body.sourceConnectionId === undefined
+            ? undefined
+            : requiredString(
+                body.sourceConnectionId,
+                "sourceConnectionId",
+                (message) => new OAuthFlowError("invalid_input", message),
+              ),
       });
       const authorizationUrl = new URL(authorization.authorizationUrl);
       this.options.logger?.info(
