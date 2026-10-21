@@ -296,6 +296,46 @@ describe("OAuthFlowService", () => {
     });
   });
 
+  it("starts a fresh authorization using the selected stored app without its account token", async () => {
+    const services = createServices([customOAuthProvider], {
+      allowedCustomOAuth: ["*"],
+      secretCodec: new AesGcmSecretCodec("test-key"),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ code: 0, data: { access_token: "source-token", token_type: "Bearer" } })),
+    );
+    const source = await services.flow.startAuthorization({
+      service: "custom_oauth",
+      connectionName: "Fulcrum",
+      clientConfig: { clientId: "fulcrum-client", clientSecret: "secret", extra: { tenant: "tenant-a" } },
+    });
+    await services.flow.completeAuthorization({ state: source.state, code: "source-code" });
+    const choices = await services.flow.listClientSources("custom_oauth");
+    expect(choices).toEqual([
+      { connectionId: expect.any(String), connectionName: "Fulcrum", clientId: "fulcrum-client" },
+    ]);
+    const destination = await services.flow.startAuthorization({
+      service: "custom_oauth",
+      connectionName: "destination",
+      sourceConnectionId: choices[0]!.connectionId,
+    });
+    expect(new URL(destination.authorizationUrl).searchParams.get("app_id")).toBe("fulcrum-client");
+    expect(await services.states.take(destination.state)).toMatchObject({
+      connectionName: "destination",
+      clientConfig: { clientId: "fulcrum-client", clientSecret: "secret" },
+    });
+    expect(await services.connections.getCredential("custom_oauth", "Fulcrum")).toMatchObject({
+      accessToken: "source-token",
+    });
+    await expect(services.connections.getCredential("custom_oauth", "destination")).rejects.toMatchObject({
+      code: "connection_not_found",
+    });
+    await expect(
+      services.flow.startAuthorization({ service: "custom_oauth", sourceConnectionId: "missing" }),
+    ).rejects.toMatchObject({ code: "oauth_client_source_not_found" });
+  });
+
   it("rejects connection-scoped OAuth clients outside the deployment allowlist", async () => {
     const services = createServices([customOAuthProvider], {
       allowedCustomOAuth: ["github"],

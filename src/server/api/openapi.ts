@@ -314,6 +314,27 @@ export function createOpenApiDocument(
       items: { $ref: "#/components/schemas/OAuthClientConfigSummary" },
     }),
     "/api/oauth/configs/{service}": createOAuthConfigPath(),
+    "/api/oauth/client-sources/{service}": {
+      get: {
+        tags: ["OAuth"],
+        summary: "List configured connection OAuth apps without secrets or account tokens.",
+        parameters: [{ name: "service", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: jsonResponse(
+            jsonSchema.array(
+              jsonSchema.object(
+                {
+                  connectionId: jsonSchema.string(),
+                  connectionName: jsonSchema.string(),
+                  clientId: jsonSchema.string(),
+                },
+                { required: ["connectionId", "connectionName", "clientId"] },
+              ),
+            ),
+          ),
+        },
+      },
+    },
     "/api/oauth/authorizations": createOAuthAuthorizationPath(),
     "/api/runtime-tokens": createRuntimeTokensPath(),
     "/api/runtime-tokens/{id}": createRuntimeTokenPath(),
@@ -1271,6 +1292,10 @@ function createOAuthAuthorizationPath(): Record<string, unknown> {
                 service: jsonSchema.string({ description: "Provider service identifier." }),
                 connectionName: jsonSchema.string({
                   description: "Optional local connection name. Defaults to default.",
+                }),
+                sourceConnectionId: jsonSchema.string({
+                  description:
+                    "Reuse this provider connection's OAuth app for a fresh authorization. Never copies its account token. Mutually exclusive with clientId/clientSecret.",
                 }),
                 clientId: jsonSchema.string({ description: "Optional connection-scoped OAuth app client id." }),
                 clientSecret: jsonSchema.string({
