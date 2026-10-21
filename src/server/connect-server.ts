@@ -249,6 +249,7 @@ export class ConnectServer {
     app.delete("/api/oauth/configs/:service", (context) =>
       this.deleteOAuthConfig(context, context.req.param("service")),
     );
+    app.get("/api/oauth/client-sources/:service", (context) => this.listOAuthClientSources(context));
     app.post("/api/oauth/authorizations", (context) => this.createOAuthAuthorization(context));
     app.get("/oauth/callback", (context) => this.completeOAuth(context));
     app.post("/mcp", (context) => this.handleMcp(context));
@@ -931,6 +932,25 @@ export class ConnectServer {
     );
   }
 
+  private async listOAuthClientSources(context: Context): Promise<Response> {
+    try {
+      return context.json(
+        await this.options.oauthFlow.listClientSources(
+          requiredString(
+            context.req.param("service"),
+            "service",
+            (message) => new OAuthClientConfigError("invalid_input", message),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof OAuthClientConfigError || error instanceof ConnectionError) {
+        return context.json({ error: { code: error.code, message: error.message } }, 400);
+      }
+      throw error;
+    }
+  }
+
   private async createOAuthAuthorization(context: Context): Promise<Response> {
     const body = await readJsonBody(context);
     const requestedService = optionalString(body.service);
@@ -952,6 +972,14 @@ export class ConnectServer {
         service,
         connectionName,
         clientConfig: readOAuthClientConfigInput(body),
+        sourceConnectionId:
+          body.sourceConnectionId === undefined
+            ? undefined
+            : requiredString(
+                body.sourceConnectionId,
+                "sourceConnectionId",
+                (message) => new OAuthFlowError("invalid_input", message),
+              ),
       });
       const authorizationUrl = new URL(authorization.authorizationUrl);
       this.options.logger?.info(
