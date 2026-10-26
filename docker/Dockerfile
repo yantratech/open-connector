@@ -26,7 +26,9 @@ COPY --from=build /app/catalog ./catalog
 COPY --from=build /app/dist ./dist
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/open-connector
 
-RUN npm ci --omit=dev --ignore-scripts
+# Runtime entrypoints invoke Node directly; npm is needed only during installation.
+RUN npm ci --omit=dev --ignore-scripts \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /root/.npm
 VOLUME ["/app/data"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
