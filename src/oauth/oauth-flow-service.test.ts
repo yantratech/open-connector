@@ -803,6 +803,9 @@ describe("OAuthFlowService", () => {
   });
 
   it("stores the token returned by a provider OAuth runtime", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-29T00:00:00.000Z"));
+
     const services = createServices([oauthProvider], {
       oauthRuntime: {
         async exchangeCode() {
