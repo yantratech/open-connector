@@ -24,6 +24,7 @@ export interface OAuthAuthorizationStartInput {
   service: string;
   connectionName?: string;
   clientConfig?: OAuthClientConfigInput;
+  sourceConnectionId?: string;
 }
 
 export interface OAuthAuthorizationCompleteInput {
@@ -87,12 +88,36 @@ export class OAuthFlowService {
     this.isCustomClientConfigAllowed = input.isCustomClientConfigAllowed ?? (() => false);
   }
 
+  /** Safe configured-app choices. Account tokens and client secrets stay inside the runtime. */
+  async listClientSources(
+    service: string,
+  ): Promise<Array<{ connectionId: string; connectionName: string; clientId: string }>> {
+    this.clientConfigs.getOAuthDefinition(service);
+    if (!this.isCustomClientConfigAllowed(service) || !this.secretCodec?.encrypted) return [];
+    return (await this.connections.listOAuthClientSources(service)).map((source) => ({
+      connectionId: source.id,
+      connectionName: source.connectionName,
+      clientId: source.config.clientId,
+    }));
+  }
+
   async startAuthorization(input: OAuthAuthorizationStartInput): Promise<OAuthAuthorizationStart> {
     const { service, connectionName } = input;
     this.connections.assertProviderAvailable(service);
     const auth = this.clientConfigs.getOAuthDefinition(service);
-    const config = input.clientConfig
-      ? this.resolveCustomClientConfig(service, input.clientConfig)
+    if (input.clientConfig && input.sourceConnectionId) {
+      throw new OAuthFlowError("invalid_input", "Choose a configured source or supply a custom app, not both.");
+    }
+    let customConfig = input.clientConfig;
+    if (input.sourceConnectionId) {
+      const source = (await this.connections.listOAuthClientSources(service)).find(
+        (candidate) => candidate.id === input.sourceConnectionId,
+      );
+      if (!source) throw new OAuthFlowError("oauth_client_source_not_found", "The selected OAuth app is unavailable.");
+      customConfig = source.config;
+    }
+    const config = customConfig
+      ? this.resolveCustomClientConfig(service, customConfig)
       : await this.clientConfigs.getConfig(service);
     if (!config) {
       throw new OAuthFlowError("oauth_client_config_required", `Configure an OAuth client for ${service} first.`);
@@ -108,7 +133,7 @@ export class OAuthFlowService {
       state,
       createdAt: now.toISOString(),
       pkceCodeVerifier,
-      clientConfig: input.clientConfig ? config : undefined,
+      clientConfig: customConfig ? config : undefined,
     });
 
     const authorizationUrl = new URL(this.clientConfigs.resolveEndpointUrl(service, auth.authorizationUrl, config));

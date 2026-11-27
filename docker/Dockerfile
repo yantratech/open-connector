@@ -1,4 +1,4 @@
-FROM node:24-alpine AS build
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json vitest.config.ts ./
 COPY web ./web
@@ -10,7 +10,7 @@ RUN npm run generate:catalog
 RUN npm run build
 RUN npm run build --workspace web
 
-FROM node:24-alpine
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
@@ -26,7 +26,9 @@ COPY --from=build /app/catalog ./catalog
 COPY --from=build /app/dist ./dist
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/open-connector
 
-RUN npm ci --omit=dev --ignore-scripts
+# Runtime entrypoints invoke Node directly; npm is needed only during installation.
+RUN npm ci --omit=dev --ignore-scripts \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /root/.npm
 VOLUME ["/app/data"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
