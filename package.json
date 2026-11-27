@@ -77,7 +77,7 @@
     "wrangler": "^4.127.1"
   },
   "overrides": {
-    "ws": "^8.21.1"
+    "ws": "^8.23.0"
   },
   "allowScripts": {
     "fsevents@2.3.3": true,
