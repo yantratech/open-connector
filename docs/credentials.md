@@ -397,3 +397,14 @@ npm run dev
 Action policy entries are comma-separated action ids. A provider-wide wildcard such as `gmail.*`
 matches all actions for that provider, and a bare `*` matches every action. Proxy policy entries are
 comma-separated provider service names, or `*` for all provider proxies.
+
+## Reusing a configured OAuth app
+
+Administrators can list `GET /api/oauth/client-sources/{service}` to obtain safe
+connection IDs, names, and client IDs for connections with their own OAuth app.
+Pass `sourceConnectionId` to `POST /api/oauth/authorizations`, alongside the
+provider and a new `connectionName`, to sign in with that app. The runtime
+snapshots its client configuration into the pending flow; it never copies the
+source account's access or refresh token. The source must still exist and belong
+to the requested provider. This requires custom OAuth to be enabled and encryption
+configured, just like entering a custom client manually.

@@ -12,10 +12,12 @@ import type {
   RuntimeLogger,
 } from "./core/types.ts";
 import type { MarketplacePricing, MarketplaceService } from "./marketplace/marketplace-service.ts";
+import type { OAuthClientConfig } from "./oauth/oauth-client-config-service.ts";
 import type { IOAuthCredentialRefresher } from "./oauth/oauth-credential-refresh-service.ts";
 import type { IProviderLoader } from "./providers/provider-loader.ts";
 
 import { normalizeCredentialValues } from "./core/credential-fields.ts";
+import { readOAuthClientConfigMetadata } from "./oauth/oauth-client-config-service.ts";
 import { providerFetch } from "./providers/provider-runtime.ts";
 
 export const defaultConnectionName = "default";
@@ -217,6 +219,20 @@ export class ConnectionService {
       if (preferences.get(service) === true) authenticated.add(service);
     }
     return services.filter((service) => authenticated.has(service));
+  }
+
+  /** Read reusable app configuration without refreshing or returning account tokens. */
+  async listOAuthClientSources(
+    service: string,
+  ): Promise<Array<{ id: string; connectionName: string; config: OAuthClientConfig }>> {
+    this.assertProviderAvailable(service);
+    const sources: Array<{ id: string; connectionName: string; config: OAuthClientConfig }> = [];
+    for (const connection of await this.store.list()) {
+      if (connection.service !== service || connection.credential.authType !== "oauth2") continue;
+      const config = readOAuthClientConfigMetadata(service, connection.credential.metadata ?? {});
+      if (config) sources.push({ id: connection.id, connectionName: connection.connectionName, config });
+    }
+    return sources;
   }
 
   async getConnectionSummary(service: string, connectionName?: string): Promise<ConnectionSummary | undefined> {
